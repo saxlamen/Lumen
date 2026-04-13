@@ -266,8 +266,36 @@ namespace platf {
   }
 
   void restart() {
-    // With KeepAlive in launchd, exiting will trigger automatic restart
-    lifetime::exit_sunshine(0, true);
+    uid_t uid = getuid();
+    char plist_path[4096];
+    snprintf(plist_path, sizeof(plist_path), "%s/Library/LaunchAgents/homebrew.mxcl.lumen.plist", getenv("HOME"));
+
+    pid_t pid = fork();
+    if (pid < 0) {
+      BOOST_LOG(fatal) << "fork() failed"sv;
+      return;
+    }
+
+    if (pid > 0) {
+      // Parent - graceful shutdown
+      lifetime::exit_sunshine(0, true);
+      return;
+    }
+
+    // Child - wait for parent to fully exit
+    sleep(2);
+
+    // Stop and restart via launchctl
+    char cmd[8192];
+    snprintf(cmd, sizeof(cmd), "launchctl bootout gui/%d/homebrew.mxcl.lumen 2>/dev/null", uid);
+    system(cmd);
+
+    usleep(100000);
+
+    snprintf(cmd, sizeof(cmd), "launchctl bootstrap gui/%d %s", uid, plist_path);
+    system(cmd);
+
+    exit(0);
   }
 
   int set_env(const std::string &name, const std::string &value) {
