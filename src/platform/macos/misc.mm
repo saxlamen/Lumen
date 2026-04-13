@@ -298,27 +298,12 @@ namespace platf {
     exit(0);
   }
 
-  void quit_cleanup() {
-    // Fork to do launchctl cleanup after parent exits
-    pid_t pid = fork();
-    if (pid < 0) {
-      return;
-    }
-    if (pid > 0) {
-      return;  // Parent continues to exit normally
-    }
-
-    // Child waits and then cleans up launchd state
-    sleep(1);
+  void quit() {
+    // Do launchctl cleanup synchronously before shutting down
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "launchctl bootout \"gui/%d/homebrew.mxcl.lumen\" 2>/dev/null", getuid());
     system(cmd);
-    exit(0);
-  }
 
-  void quit() {
-    // Register cleanup and exit
-    atexit(quit_cleanup);
     lifetime::exit_sunshine(0, true);
   }
 
