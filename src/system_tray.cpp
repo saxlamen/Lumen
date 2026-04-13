@@ -85,7 +85,10 @@ namespace system_tray {
   void tray_quit_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Quitting from system tray"sv;
 
-  #ifdef _WIN32
+  #ifdef __APPLE__
+    platf::quit();
+    return;
+  #elif defined(_WIN32)
     // If we're running in a service, return a special status to
     // tell it to terminate too, otherwise it will just respawn us.
     if (GetConsoleWindow() == nullptr) {
