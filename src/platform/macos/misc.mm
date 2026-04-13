@@ -265,43 +265,8 @@ namespace platf {
     return ::virtual_display_get_id();
   }
 
-  void restart_on_exit() {
-    char executable[2048];
-    uint32_t size = sizeof(executable);
-    if (_NSGetExecutablePath(executable, &size) < 0) {
-      BOOST_LOG(fatal) << "NSGetExecutablePath() failed: "sv << errno;
-      return;
-    }
-
-    // Fork so launchd sees the parent exit and can restart it
-    pid_t pid = fork();
-    if (pid < 0) {
-      BOOST_LOG(fatal) << "fork() failed: "sv << errno;
-      return;
-    }
-
-    if (pid > 0) {
-      // Parent exits - launchd will restart us
-      BOOST_LOG(info) << "Restarting Lumen (pid "sv << pid << ")..."sv;
-      exit(0);
-    }
-
-    // Child continues - re-exec ourselves with the same arguments
-    // ASIO doesn't use O_CLOEXEC, so we have to close all fds ourselves
-    int openmax = (int) sysconf(_SC_OPEN_MAX);
-    for (int fd = STDERR_FILENO + 1; fd < openmax; fd++) {
-      close(fd);
-    }
-
-    if (execv(executable, lifetime::get_argv()) < 0) {
-      BOOST_LOG(fatal) << "execv() failed: "sv << errno;
-      return;
-    }
-  }
-
   void restart() {
-    // Gracefully clean up and restart ourselves instead of exiting
-    atexit(restart_on_exit);
+    // With KeepAlive in launchd, exiting will trigger automatic restart
     lifetime::exit_sunshine(0, true);
   }
 
