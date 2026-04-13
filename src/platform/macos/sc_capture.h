@@ -20,6 +20,7 @@ API_AVAILABLE(macos(12.3))
 @property (nonatomic, assign) int frameWidth;
 @property (nonatomic, assign) int frameHeight;
 @property (nonatomic, assign) BOOL captureAudio;
+@property (nonatomic, assign) BOOL showsCursor;
 
 @property (nonatomic, strong) SCStream *stream;
 @property (nonatomic, strong) SCShareableContent *shareableContent;

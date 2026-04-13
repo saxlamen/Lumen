@@ -141,6 +141,7 @@ namespace config {
     } dd;
 
     std::string virtual_display;  ///< "enabled" or "disabled" — whether to create on-demand virtual displays (macOS only).
+    bool show_cursor;  ///< Whether to show the cursor in the captured stream.
 
     int max_bitrate;  // Maximum bitrate, sets ceiling in kbps for bitrate requested from client
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
