@@ -81,6 +81,63 @@ After installation, grant these macOS permissions when prompted:
 
 ---
 
+## Homebrew Installation
+
+For users with an existing Homebrew setup, Lumen is available as a tap:
+
+```bash
+# Add the Lumen tap
+brew tap saxlamen/lumen-local
+
+# Install Lumen (builds from source)
+brew install saxlamen/lumen-local/lumen
+```
+
+### Managing the Service
+
+```bash
+# Start Lumen at login
+brew services start lumen
+
+# Stop the service
+brew services stop lumen
+
+# Restart after config changes
+brew services restart lumen
+```
+
+### Upgrading
+
+When a new version is pushed to GitHub, simply run:
+
+```bash
+brew upgrade saxlamen/lumen-local/lumen
+```
+
+### Uninstall
+
+```bash
+brew uninstall saxlamen/lumen-local/lumen
+brew untap saxlamen/lumen-local
+```
+
+### How It Works
+
+The Homebrew formula (`packaging/lumen.rb`):
+1. Clones the Lumen GitHub repository
+2. Installs build dependencies via Homebrew
+3. Runs cmake with appropriate flags for Homebrew's environment
+4. Builds the `sunshine` binary and `vd_helper`
+5. Installs to `/opt/homebrew/opt/lumen/bin/`
+6. Signs binaries with `codesign` for Gatekeeper compatibility
+7. Sets up a launchd service for background operation
+
+### Configuration
+
+After installation, edit `~/.config/sunshine/sunshine.conf` for runtime settings. The Homebrew-installed binary reads from this same location as the git-based install.
+
+---
+
 ## Usage
 
 ### Start Lumen
