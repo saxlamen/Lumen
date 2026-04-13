@@ -273,13 +273,26 @@ namespace platf {
       return;
     }
 
+    // Fork so launchd sees the parent exit and can restart it
+    pid_t pid = fork();
+    if (pid < 0) {
+      BOOST_LOG(fatal) << "fork() failed: "sv << errno;
+      return;
+    }
+
+    if (pid > 0) {
+      // Parent exits - launchd will restart us
+      BOOST_LOG(info) << "Restarting Lumen (pid "sv << pid << ")..."sv;
+      exit(0);
+    }
+
+    // Child continues - re-exec ourselves with the same arguments
     // ASIO doesn't use O_CLOEXEC, so we have to close all fds ourselves
     int openmax = (int) sysconf(_SC_OPEN_MAX);
     for (int fd = STDERR_FILENO + 1; fd < openmax; fd++) {
       close(fd);
     }
 
-    // Re-exec ourselves with the same arguments
     if (execv(executable, lifetime::get_argv()) < 0) {
       BOOST_LOG(fatal) << "execv() failed: "sv << errno;
       return;
