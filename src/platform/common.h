@@ -626,6 +626,7 @@ namespace platf {
   void streaming_will_stop();
 
   void restart();
+  void quit();
 
   /**
    * @brief Set an environment variable.
