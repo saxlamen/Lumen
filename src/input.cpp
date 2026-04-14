@@ -214,6 +214,7 @@ namespace input {
     switch (keyCode) {
       case 0x4E /* VKEY_N */:
         display_cursor = !display_cursor;
+        config::save_show_cursor(display_cursor);
         return 1;
     }
 

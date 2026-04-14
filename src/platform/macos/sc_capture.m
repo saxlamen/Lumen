@@ -184,7 +184,7 @@ API_AVAILABLE(macos(12.3))
         config.minimumFrameInterval = CMTimeMake(1, self.frameRate);
         config.pixelFormat = self.pixelFormat;
         config.queueDepth = 5;
-        config.showsCursor = YES;
+        config.showsCursor = self.showsCursor;
 
         // Enable audio capture - this is the key feature!
         if (self.captureAudio) {

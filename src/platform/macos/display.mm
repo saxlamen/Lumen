@@ -194,6 +194,8 @@ namespace platf {
     }
 
     capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
+      sc_capture.showsCursor = *cursor;
+
       auto signal = [sc_capture captureVideo:^(CMSampleBufferRef sampleBuffer) {
         std::shared_ptr<img_t> img_out;
         if (!pull_free_image_cb(img_out)) {

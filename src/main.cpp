@@ -160,6 +160,9 @@ int main(int argc, char *argv[]) {
   }
   config::modified_config_settings.clear();
 
+  // Initialize display_cursor from config
+  display_cursor = config::video.show_cursor;
+
   if (!config::sunshine.cmd.name.empty()) {
     auto fn = cmd_to_func.find(config::sunshine.cmd.name);
     if (fn == std::end(cmd_to_func)) {
