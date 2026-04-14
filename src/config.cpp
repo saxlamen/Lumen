@@ -507,6 +507,8 @@ namespace config {
     "enabled"s,  // virtual_display
     true,  // show_cursor
 
+    true,  // show_cursor
+
     0,  // max_bitrate
     0  // minimum_fps_target (0 = framerate)
   };
@@ -1471,5 +1473,31 @@ namespace config {
 #endif
 
     return 0;
+  }
+
+  void save_show_cursor(bool show_cursor) {
+    auto &path = sunshine.config_file;
+    auto content = file_handler::read_file(path.c_str());
+
+    std::string search = "show_cursor = ";
+    auto pos = content.find(search);
+
+    std::string new_value = std::string(search) + (show_cursor ? "true" : "false");
+
+    if (pos != std::string::npos) {
+      // Find end of line after the found position
+      auto line_end = content.find('\n', pos);
+      if (line_end == std::string::npos) line_end = content.size();
+      // Replace existing line
+      content.replace(pos, line_end - pos, new_value);
+    } else {
+      // Add new line at end
+      if (!content.empty() && content.back() != '\n') {
+        content += '\n';
+      }
+      content += new_value + '\n';
+    }
+
+    file_handler::write_file(path.c_str(), content);
   }
 }  // namespace config
