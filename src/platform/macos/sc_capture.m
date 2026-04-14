@@ -280,6 +280,34 @@ API_AVAILABLE(macos(12.3))
     }
 }
 
+- (void)updateShowsCursor:(BOOL)showsCursor {
+    @synchronized(self) {
+        _showsCursor = showsCursor;
+        // If stream is already running, we need to restart it to apply the new setting
+        if (self.stream) {
+            // Save current callback blocks
+            VideoFrameCallbackBlock vidCb = self.videoCallback;
+            AudioSampleCallbackBlock audCb = self.audioCallback;
+
+            // Stop current capture
+            dispatch_semaphore_t stopSem = dispatch_semaphore_create(0);
+            [self.stream stopCaptureWithCompletionHandler:^(NSError *error) {
+                if (error) {
+                    NSLog(@"[SCCapture] Error stopping capture for cursor update: %@", error.localizedDescription);
+                }
+                dispatch_semaphore_signal(stopSem);
+            }];
+            dispatch_semaphore_wait(stopSem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+            self.stream = nil;
+
+            // Restart with same callbacks
+            if (vidCb) {
+                [self captureVideo:vidCb audioCallback:audCb];
+            }
+        }
+    }
+}
+
 #pragma mark - SCStreamDelegate
 
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {

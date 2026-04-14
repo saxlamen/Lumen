@@ -215,6 +215,7 @@ namespace input {
       case 0x4E /* VKEY_N */:
         display_cursor = !display_cursor;
         config::save_show_cursor(display_cursor);
+        mail::man->event<bool>(mail::switch_cursor)->raise(display_cursor);
         return 1;
     }
 

@@ -50,5 +50,6 @@ typedef void (^AudioSampleCallbackBlock)(CMSampleBufferRef);
 - (dispatch_semaphore_t)captureVideo:(VideoFrameCallbackBlock)videoCallback
                          audioCallback:(AudioSampleCallbackBlock)audioCallback;
 - (void)stopCapture;
+- (void)updateShowsCursor:(BOOL)showsCursor;
 
 @end
