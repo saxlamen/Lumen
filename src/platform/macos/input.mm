@@ -52,6 +52,10 @@ namespace platf {
     bool mouse_down[3] {};  // mouse button status
     std::chrono::steady_clock::steady_clock::time_point last_mouse_event[3][2];  // timestamp of last mouse events
 
+    // scroll phase tracking for macOS native smooth inertia / momentum
+    std::chrono::steady_clock::time_point last_scroll_time {};
+    bool scroll_in_progress {};
+
     // gamepad support: HID mode (virtual HID device) with emulation fallback
     bool hid_available {};
     gamepad_mode_e gamepad_modes[MAX_GAMEPADS] {};
@@ -549,10 +553,34 @@ const KeyCodeMap kKeyCodesMap[] = {
     macos_input->last_mouse_event[mac_button][release] = now;
   }
 
+  void post_pixel_scroll(macos_input_t *macos_input, int32_t delta_y, int32_t delta_x) {
+    auto now = std::chrono::steady_clock::now();
+    // If more than 120ms elapsed since last scroll packet, close prior gesture and start a new one
+    constexpr auto GESTURE_TIMEOUT = std::chrono::milliseconds(120);
+
+    if (macos_input->scroll_in_progress && (now - macos_input->last_scroll_time > GESTURE_TIMEOUT)) {
+      // Send Ended event to gracefully finish previous gesture
+      CGEventRef end_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
+      CGEventSetIntegerValueField(end_event, kCGScrollWheelEventIsContinuous, 1);
+      CGEventSetIntegerValueField(end_event, kCGScrollWheelEventScrollPhase, kCGScrollPhaseEnded);
+      CGEventPost(kCGHIDEventTap, end_event);
+      CFRelease(end_event);
+      macos_input->scroll_in_progress = false;
+    }
+
+    CGScrollPhase phase = macos_input->scroll_in_progress ? kCGScrollPhaseChanged : kCGScrollPhaseBegan;
+    macos_input->scroll_in_progress = true;
+    macos_input->last_scroll_time = now;
+
+    CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_y, delta_x);
+    CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
+    CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+  }
+
   void scroll(input_t &input, const int high_res_distance) {
     if (config::input.macos_smooth_scrolling) {
-      // Convert WHEEL_DELTA (120) to smooth pixel scroll distance.
-      // Approximately 40 pixels per standard wheel tick (120 units) gives natural macOS trackpad/wheel feel.
       constexpr double PIXELS_PER_TICK = 40.0;
       double pixel_delta = (static_cast<double>(high_res_distance) / 120.0) * PIXELS_PER_TICK;
       int32_t delta_int = static_cast<int32_t>(std::round(pixel_delta));
@@ -560,10 +588,8 @@ const KeyCodeMap kKeyCodesMap[] = {
         delta_int = high_res_distance > 0 ? 1 : -1;
       }
 
-      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_int, 0);
-      CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
-      CGEventPost(kCGHIDEventTap, event);
-      CFRelease(event);
+      auto macos_input = static_cast<macos_input_t *>(input.get());
+      post_pixel_scroll(macos_input, delta_int, 0);
     } else {
       int wheelY = high_res_distance / 120;
       int wheelX = 0;
@@ -582,10 +608,8 @@ const KeyCodeMap kKeyCodesMap[] = {
         delta_int = high_res_distance > 0 ? 1 : -1;
       }
 
-      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, delta_int);
-      CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
-      CGEventPost(kCGHIDEventTap, event);
-      CFRelease(event);
+      auto macos_input = static_cast<macos_input_t *>(input.get());
+      post_pixel_scroll(macos_input, 0, delta_int);
     } else {
       int wheelY = 0;
       int wheelX = high_res_distance / 120;
