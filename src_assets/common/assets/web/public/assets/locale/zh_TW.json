@@ -239,6 +239,8 @@
     "hevc_mode_desc": "允許用戶端要求 HEVC Main 或 HEVC Main10 視訊串流。HEVC 的編碼較耗費 CPU，因此使用軟體編碼時，啟用此功能可能會降低效能。",
     "high_resolution_scrolling": "支援高解析度捲動",
     "high_resolution_scrolling_desc": "啟用後，Sunshine 會傳遞來自 Moonlight 用戶端的高解析度捲動事件。對於某些在高解析度捲動時捲動速度過快的舊應用程式，建議將此選項停用。",
+    "macos_smooth_scrolling": "macOS 平滑捲動最佳化 (Pixel-based)",
+    "macos_smooth_scrolling_desc": "僅適用於 macOS 主機。以像素級 (Pixel-based) 連續滾動取代傳統行數 (Line) 跳躍，大幅提升在 macOS 上的滑動滑順感並避免卡頓。",
     "install_steam_audio_drivers": "安裝 Steam 音訊驅動程式",
     "install_steam_audio_drivers_desc": "如果已安裝 Steam，這將會自動安裝 Steam Streaming Speakers 驅動程式，以支援 5.1/7.1 環繞音效和主機音訊靜音。",
     "key_repeat_delay": "按鍵重複延遲",

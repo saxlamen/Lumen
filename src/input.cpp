@@ -819,7 +819,7 @@ namespace input {
       return;
     }
 
-    if (config::input.high_resolution_scrolling) {
+    if (config::input.high_resolution_scrolling || config::input.macos_smooth_scrolling) {
       platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));
     } else {
       input->accumulated_vscroll_delta += util::endian::big(packet->scrollAmt1);
@@ -842,7 +842,7 @@ namespace input {
       return;
     }
 
-    if (config::input.high_resolution_scrolling) {
+    if (config::input.high_resolution_scrolling || config::input.macos_smooth_scrolling) {
       platf::hscroll(platf_input, util::endian::big(packet->scrollAmount));
     } else {
       input->accumulated_hscroll_delta += util::endian::big(packet->scrollAmount);

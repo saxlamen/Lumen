@@ -207,6 +207,7 @@ namespace config {
     bool always_send_scancodes;
 
     bool high_resolution_scrolling;
+    bool macos_smooth_scrolling;
     bool native_pen_touch;
   };
 

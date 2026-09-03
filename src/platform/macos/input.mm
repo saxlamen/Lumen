@@ -14,6 +14,7 @@
 #include <mach/mach.h>
 
 // local includes
+#include "src/config.h"
 #include "src/display_device.h"
 #include "src/input.h"
 #include "src/logging.h"
@@ -549,19 +550,49 @@ const KeyCodeMap kKeyCodesMap[] = {
   }
 
   void scroll(input_t &input, const int high_res_distance) {
-    int wheelY = high_res_distance / 120;
-    int wheelX = 0;
-    CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
-    CGEventPost(kCGHIDEventTap, upEvent);
-    CFRelease(upEvent);
+    if (config::input.macos_smooth_scrolling) {
+      // Convert WHEEL_DELTA (120) to smooth pixel scroll distance.
+      // Approximately 40 pixels per standard wheel tick (120 units) gives natural macOS trackpad/wheel feel.
+      constexpr double PIXELS_PER_TICK = 40.0;
+      double pixel_delta = (static_cast<double>(high_res_distance) / 120.0) * PIXELS_PER_TICK;
+      int32_t delta_int = static_cast<int32_t>(std::round(pixel_delta));
+      if (delta_int == 0 && high_res_distance != 0) {
+        delta_int = high_res_distance > 0 ? 1 : -1;
+      }
+
+      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_int, 0);
+      CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
+      CGEventPost(kCGHIDEventTap, event);
+      CFRelease(event);
+    } else {
+      int wheelY = high_res_distance / 120;
+      int wheelX = 0;
+      CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
+      CGEventPost(kCGHIDEventTap, upEvent);
+      CFRelease(upEvent);
+    }
   }
 
   void hscroll(input_t &input, int high_res_distance) {
-    int wheelY = 0;
-    int wheelX = high_res_distance / 120;
-    CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
-    CGEventPost(kCGHIDEventTap, upEvent);
-    CFRelease(upEvent);
+    if (config::input.macos_smooth_scrolling) {
+      constexpr double PIXELS_PER_TICK = 40.0;
+      double pixel_delta = (static_cast<double>(high_res_distance) / 120.0) * PIXELS_PER_TICK;
+      int32_t delta_int = static_cast<int32_t>(std::round(pixel_delta));
+      if (delta_int == 0 && high_res_distance != 0) {
+        delta_int = high_res_distance > 0 ? 1 : -1;
+      }
+
+      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, delta_int);
+      CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
+      CGEventPost(kCGHIDEventTap, event);
+      CFRelease(event);
+    } else {
+      int wheelY = 0;
+      int wheelX = high_res_distance / 120;
+      CGEventRef upEvent = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitLine, 2, wheelY, wheelX);
+      CGEventPost(kCGHIDEventTap, upEvent);
+      CFRelease(upEvent);
+    }
   }
 
   /**
