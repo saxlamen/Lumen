@@ -3,8 +3,11 @@
  * @brief Definitions for macOS input handling.
  */
 // standard includes
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 // platform includes
@@ -52,9 +55,15 @@ namespace platf {
     bool mouse_down[3] {};  // mouse button status
     std::chrono::steady_clock::steady_clock::time_point last_mouse_event[3][2];  // timestamp of last mouse events
 
-    // scroll phase tracking for macOS native smooth inertia / momentum
+    // scroll phase & inertia tracking for macOS native momentum
     std::chrono::steady_clock::time_point last_scroll_time {};
     bool scroll_in_progress {};
+    double scroll_velocity_y {};
+    double scroll_velocity_x {};
+    std::mutex scroll_mutex {};
+    std::condition_variable scroll_cv {};
+    std::atomic<bool> scroll_thread_stop {false};
+    std::thread scroll_inertia_thread {};
 
     // gamepad support: HID mode (virtual HID device) with emulation fallback
     bool hid_available {};
@@ -553,30 +562,120 @@ const KeyCodeMap kKeyCodesMap[] = {
     macos_input->last_mouse_event[mac_button][release] = now;
   }
 
-  void post_pixel_scroll(macos_input_t *macos_input, int32_t delta_y, int32_t delta_x) {
-    auto now = std::chrono::steady_clock::now();
-    // If more than 120ms elapsed since last scroll packet, close prior gesture and start a new one
-    constexpr auto GESTURE_TIMEOUT = std::chrono::milliseconds(120);
+  void scroll_inertia_loop(macos_input_t *macos_input) {
+    constexpr auto FRAME_DURATION = std::chrono::milliseconds(16); // ~60fps
+    constexpr double FRICTION = 0.92; // decay factor per frame
+    constexpr double MIN_VELOCITY = 0.5; // stop threshold in pixels
 
-    if (macos_input->scroll_in_progress && (now - macos_input->last_scroll_time > GESTURE_TIMEOUT)) {
-      // Send Ended event to gracefully finish previous gesture
+    while (!macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
+      std::unique_lock<std::mutex> lock(macos_input->scroll_mutex);
+
+      // Wait until there is an active scroll or stop requested
+      macos_input->scroll_cv.wait_for(lock, std::chrono::milliseconds(50), [&] {
+        return macos_input->scroll_thread_stop.load(std::memory_order_relaxed) || macos_input->scroll_in_progress;
+      });
+
+      if (macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
+        break;
+      }
+
+      if (!macos_input->scroll_in_progress) {
+        continue;
+      }
+
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - macos_input->last_scroll_time);
+
+      // If user is actively scrolling (packets received recently within 80ms), wait for release
+      if (elapsed < std::chrono::milliseconds(80)) {
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
+
+      // User has released! End active gesture and begin momentum phase
+      double vy = macos_input->scroll_velocity_y;
+      double vx = macos_input->scroll_velocity_x;
+      macos_input->scroll_velocity_y = 0;
+      macos_input->scroll_velocity_x = 0;
+      macos_input->scroll_in_progress = false;
+
+      // 1. Post Gesture Ended
       CGEventRef end_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventIsContinuous, 1);
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventScrollPhase, kCGScrollPhaseEnded);
       CGEventPost(kCGHIDEventTap, end_event);
       CFRelease(end_event);
-      macos_input->scroll_in_progress = false;
+
+      // 2. If velocity is high enough, start inertial coasting
+      if (std::abs(vy) > 2.0 || std::abs(vx) > 2.0) {
+        // Momentum Begin
+        CGEventRef m_begin = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
+        CGEventSetIntegerValueField(m_begin, kCGScrollWheelEventIsContinuous, 1);
+        CGEventSetIntegerValueField(m_begin, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseBegin);
+        CGEventPost(kCGHIDEventTap, m_begin);
+        CFRelease(m_begin);
+
+        // Momentum Continue loop
+        while (!macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
+          // If new user input arrived, cancel momentum immediately
+          if (macos_input->scroll_in_progress) {
+            break;
+          }
+
+          vy *= FRICTION;
+          vx *= FRICTION;
+
+          if (std::abs(vy) < MIN_VELOCITY && std::abs(vx) < MIN_VELOCITY) {
+            break;
+          }
+
+          int32_t step_y = static_cast<int32_t>(std::round(vy));
+          int32_t step_x = static_cast<int32_t>(std::round(vx));
+
+          if (step_y != 0 || step_x != 0) {
+            CGEventRef m_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, step_y, step_x);
+            CGEventSetIntegerValueField(m_event, kCGScrollWheelEventIsContinuous, 1);
+            CGEventSetIntegerValueField(m_event, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseContinue);
+            CGEventPost(kCGHIDEventTap, m_event);
+            CFRelease(m_event);
+          }
+
+          lock.unlock();
+          std::this_thread::sleep_for(FRAME_DURATION);
+          lock.lock();
+        }
+
+        // Momentum End
+        CGEventRef m_end = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
+        CGEventSetIntegerValueField(m_end, kCGScrollWheelEventIsContinuous, 1);
+        CGEventSetIntegerValueField(m_end, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseEnd);
+        CGEventPost(kCGHIDEventTap, m_end);
+        CFRelease(m_end);
+      }
     }
+  }
+
+  void post_pixel_scroll(macos_input_t *macos_input, int32_t delta_y, int32_t delta_x) {
+    std::lock_guard<std::mutex> lock(macos_input->scroll_mutex);
+    auto now = std::chrono::steady_clock::now();
 
     CGScrollPhase phase = macos_input->scroll_in_progress ? kCGScrollPhaseChanged : kCGScrollPhaseBegan;
     macos_input->scroll_in_progress = true;
     macos_input->last_scroll_time = now;
+
+    // Filter/smooth velocity tracking for momentum release (exponential moving average)
+    constexpr double ALPHA = 0.5;
+    macos_input->scroll_velocity_y = (macos_input->scroll_velocity_y * (1.0 - ALPHA)) + (delta_y * ALPHA);
+    macos_input->scroll_velocity_x = (macos_input->scroll_velocity_x * (1.0 - ALPHA)) + (delta_x * ALPHA);
 
     CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_y, delta_x);
     CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
     CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
     CGEventPost(kCGHIDEventTap, event);
     CFRelease(event);
+
+    macos_input->scroll_cv.notify_one();
   }
 
   void scroll(input_t &input, const int high_res_distance) {
@@ -735,11 +834,21 @@ const KeyCodeMap kKeyCodesMap[] = {
 
     BOOST_LOG(debug) << "Display "sv << macos_input->display << ", pixel dimension: " << CGDisplayPixelsWide(macos_input->display) << "x"sv << CGDisplayPixelsHigh(macos_input->display);
 
+    // Start background scroll momentum / inertia worker thread
+    macos_input->scroll_inertia_thread = std::thread(scroll_inertia_loop, macos_input);
+
     return result;
   }
 
   void freeInput(void *p) {
     auto *input = static_cast<macos_input_t *>(p);
+
+    // Stop scroll momentum thread
+    input->scroll_thread_stop.store(true, std::memory_order_relaxed);
+    input->scroll_cv.notify_all();
+    if (input->scroll_inertia_thread.joinable()) {
+      input->scroll_inertia_thread.join();
+    }
 
     // Clean up gamepads (both HID and emulation)
     for (int i = 0; i < MAX_GAMEPADS; i++) {
