@@ -507,8 +507,6 @@ namespace config {
     "enabled"s,  // virtual_display
     true,  // show_cursor
 
-    true,  // show_cursor
-
     0,  // max_bitrate
     0  // minimum_fps_target (0 = framerate)
   };
@@ -566,6 +564,7 @@ namespace config {
     true,  // controller enabled
     true,  // always send scancodes
     true,  // high resolution scrolling
+    true,  // macos_smooth_scrolling
     true,  // native pen/touch support
   };
 
