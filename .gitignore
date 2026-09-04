@@ -6,12 +6,24 @@ node_modules/
 .DS_Store
 *.dSYM/
 
-# IDE
+# IDE & Language Server
 .vscode/
 .idea/
+.cache/
 *.swp
 *.swo
 
-# Temporary
+# Temporary & Logs
 *.log
 *.tmp
+
+# Sensitive Keys, Certificates & Credentials
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.crt
+*.mobileprovision
+*.provisionprofile
+SaxNote.md
