@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -592,6 +593,7 @@ const KeyCodeMap kKeyCodesMap[] = {
       macos_input->scroll_in_progress = false;
 
       // Post Gesture Ended event so macOS finishes rubber-banding / scrolling cleanly
+      log_scroll_event("GESTURE_END", 0, 0, 0, kCGScrollPhaseEnded, elapsed.count());
       CGEventRef end_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventIsContinuous, 1);
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventScrollPhase, kCGScrollPhaseEnded);
@@ -600,13 +602,28 @@ const KeyCodeMap kKeyCodesMap[] = {
     }
   }
 
-  void post_pixel_scroll(macos_input_t *macos_input, int32_t delta_y, int32_t delta_x) {
+  static void log_scroll_event(const char *type, int32_t raw_dist, int32_t delta_y, int32_t delta_x, int phase, int64_t dt_ms) {
+    static std::ofstream log_file("/tmp/lumen_scroll.log", std::ios::app);
+    if (log_file.is_open()) {
+      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+      ).count();
+      log_file << ms << " [" << type << "] raw=" << raw_dist
+               << " dy=" << delta_y << " dx=" << delta_x
+               << " phase=" << phase << " dt=" << dt_ms << "ms" << std::endl;
+    }
+  }
+
+  void post_pixel_scroll(macos_input_t *macos_input, int32_t raw_dist, int32_t delta_y, int32_t delta_x) {
     std::lock_guard<std::mutex> lock(macos_input->scroll_mutex);
     auto now = std::chrono::steady_clock::now();
+    int64_t dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - macos_input->last_scroll_time).count();
 
     CGScrollPhase phase = macos_input->scroll_in_progress ? kCGScrollPhaseChanged : kCGScrollPhaseBegan;
     macos_input->scroll_in_progress = true;
     macos_input->last_scroll_time = now;
+
+    log_scroll_event("SCROLL", raw_dist, delta_y, delta_x, phase, dt_ms);
 
     CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_y, delta_x);
     CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
@@ -627,7 +644,7 @@ const KeyCodeMap kKeyCodesMap[] = {
       }
 
       auto macos_input = static_cast<macos_input_t *>(input.get());
-      post_pixel_scroll(macos_input, delta_int, 0);
+      post_pixel_scroll(macos_input, high_res_distance, delta_int, 0);
     } else {
       int wheelY = high_res_distance / 120;
       int wheelX = 0;
@@ -647,7 +664,7 @@ const KeyCodeMap kKeyCodesMap[] = {
       }
 
       auto macos_input = static_cast<macos_input_t *>(input.get());
-      post_pixel_scroll(macos_input, 0, delta_int);
+      post_pixel_scroll(macos_input, high_res_distance, 0, delta_int);
     } else {
       int wheelY = 0;
       int wheelX = high_res_distance / 120;
