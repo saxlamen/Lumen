@@ -4,16 +4,19 @@
  */
 
 #include "src/platform/macos/smooth_scroll.h"
-#include "src/config.h"
 
 #include <ApplicationServices/ApplicationServices.h>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <fstream>
+#include <cstdlib>
 #include <mutex>
+#include <pthread.h>
+#include <string_view>
 #include <thread>
+
+#include "src/logging.h"
 
 namespace platf::macos {
 
@@ -23,32 +26,180 @@ namespace platf::macos {
     bool momentum_active = false;
     double scroll_velocity_y = 0.0;
     double scroll_velocity_x = 0.0;
+    double pixel_remainder_y = 0.0;
+    double pixel_remainder_x = 0.0;
 
     std::mutex scroll_mutex;
+    std::mutex event_mutex;
+    std::mutex lifecycle_mutex;
     std::condition_variable scroll_cv;
     std::atomic<bool> scroll_thread_stop {false};
     std::thread scroll_inertia_thread;
+    bool scroll_thread_initialized = false;
 
-    void log_scroll_event(const char *type, int32_t raw_dist, int32_t delta_y, int32_t delta_x, int phase, int64_t dt_ms) {
-      static std::ofstream log_file("/tmp/lumen_scroll.log", std::ios::app);
-      if (log_file.is_open()) {
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::system_clock::now().time_since_epoch()
-        ).count();
-        log_file << ms << " [" << type << "] raw=" << raw_dist
-                 << " dy=" << delta_y << " dx=" << delta_x
-                 << " phase=" << phase << " dt=" << dt_ms << "ms" << std::endl;
+    /**
+     * @brief Low-overhead counters used by the optional scroll diagnostics.
+     */
+    struct scroll_diagnostics_t {
+      std::atomic<uint64_t> input_events {0};  ///< Number of received scroll events.
+      std::atomic<uint64_t> output_events {0};  ///< Number of posted CGEvents.
+      std::atomic<uint64_t> output_interval_samples {0};  ///< Number of measured output intervals.
+      std::atomic<uint64_t> output_interval_total_us {0};  ///< Sum of measured output intervals.
+      std::atomic<uint64_t> output_interval_max_us {0};  ///< Largest measured output interval.
+      std::atomic<uint64_t> post_duration_samples {0};  ///< Number of measured CGEventPost calls.
+      std::atomic<uint64_t> post_duration_total_us {0};  ///< Sum of CGEventPost durations.
+      std::atomic<uint64_t> post_duration_max_us {0};  ///< Largest CGEventPost duration.
+      std::atomic<uint64_t> frame_interval_samples {0};  ///< Number of measured momentum frames.
+      std::atomic<uint64_t> frame_interval_total_us {0};  ///< Sum of momentum frame intervals.
+      std::atomic<uint64_t> frame_interval_max_us {0};  ///< Largest momentum frame interval.
+      std::atomic<uint64_t> interval_samples {0};  ///< Number of measured input intervals.
+      std::atomic<uint64_t> interval_total_us {0};  ///< Sum of measured input intervals.
+      std::atomic<uint64_t> interval_max_us {0};  ///< Largest measured input interval.
+      std::atomic<uint64_t> momentum_started {0};  ///< Number of momentum phases started.
+      std::atomic<uint64_t> momentum_cancelled {0};  ///< Number of momentum phases cancelled.
+    } scroll_diagnostics;
+    bool scroll_diagnostics_enabled = false;
+    bool scroll_diagnostics_trace = false;
+    std::chrono::steady_clock::time_point last_diagnostics_report {};
+    std::chrono::steady_clock::time_point last_output_time {};
+
+    /**
+     * @brief Emit and reset the current one-second scroll diagnostic counters.
+     *
+     * @param now Current monotonic time.
+     */
+    void report_scroll_diagnostics(std::chrono::steady_clock::time_point now) {
+      if (!scroll_diagnostics_enabled || now - last_diagnostics_report < std::chrono::seconds(1)) {
+        return;
+      }
+      last_diagnostics_report = now;
+
+      const auto input_events = scroll_diagnostics.input_events.exchange(0);
+      const auto output_events = scroll_diagnostics.output_events.exchange(0);
+      const auto output_interval_samples = scroll_diagnostics.output_interval_samples.exchange(0);
+      const auto output_interval_total_us = scroll_diagnostics.output_interval_total_us.exchange(0);
+      const auto output_interval_max_us = scroll_diagnostics.output_interval_max_us.exchange(0);
+      const auto post_duration_samples = scroll_diagnostics.post_duration_samples.exchange(0);
+      const auto post_duration_total_us = scroll_diagnostics.post_duration_total_us.exchange(0);
+      const auto post_duration_max_us = scroll_diagnostics.post_duration_max_us.exchange(0);
+      const auto frame_interval_samples = scroll_diagnostics.frame_interval_samples.exchange(0);
+      const auto frame_interval_total_us = scroll_diagnostics.frame_interval_total_us.exchange(0);
+      const auto frame_interval_max_us = scroll_diagnostics.frame_interval_max_us.exchange(0);
+      const auto interval_samples = scroll_diagnostics.interval_samples.exchange(0);
+      const auto interval_total_us = scroll_diagnostics.interval_total_us.exchange(0);
+      const auto interval_max_us = scroll_diagnostics.interval_max_us.exchange(0);
+      const auto momentum_started = scroll_diagnostics.momentum_started.exchange(0);
+      const auto momentum_cancelled = scroll_diagnostics.momentum_cancelled.exchange(0);
+      const auto average_interval_ms = interval_samples == 0
+        ? 0.0
+        : static_cast<double>(interval_total_us) / interval_samples / 1000.0;
+      const auto average_output_interval_ms = output_interval_samples == 0
+        ? 0.0
+        : static_cast<double>(output_interval_total_us) / output_interval_samples / 1000.0;
+      const auto average_post_duration_ms = post_duration_samples == 0
+        ? 0.0
+        : static_cast<double>(post_duration_total_us) / post_duration_samples / 1000.0;
+      const auto average_frame_interval_ms = frame_interval_samples == 0
+        ? 0.0
+        : static_cast<double>(frame_interval_total_us) / frame_interval_samples / 1000.0;
+
+      BOOST_LOG(info) << "macOS scroll diagnostics: input=" << input_events
+                      << " output=" << output_events
+                      << " avg_input_interval=" << average_interval_ms << "ms"
+                      << " max_input_interval=" << static_cast<double>(interval_max_us) / 1000.0 << "ms"
+                      << " avg_output_interval=" << average_output_interval_ms << "ms"
+                      << " max_output_interval=" << static_cast<double>(output_interval_max_us) / 1000.0 << "ms"
+                      << " avg_post_duration=" << average_post_duration_ms << "ms"
+                      << " max_post_duration=" << static_cast<double>(post_duration_max_us) / 1000.0 << "ms"
+                      << " avg_frame_interval=" << average_frame_interval_ms << "ms"
+                      << " max_frame_interval=" << static_cast<double>(frame_interval_max_us) / 1000.0 << "ms"
+                      << " momentum_started=" << momentum_started
+                      << " momentum_cancelled=" << momentum_cancelled;
+    }
+
+    /**
+     * @brief Post a synthetic scroll event to the macOS HID event stream.
+     *
+     * @param phase Scroll phase to attach to the event.
+     * @param momentum_phase Momentum phase to attach, or zero for a gesture event.
+     * @param delta_y Vertical pixel delta.
+     * @param delta_x Horizontal pixel delta.
+     */
+    void post_event(CGScrollPhase phase, CGMomentumScrollPhase momentum_phase, int32_t delta_y, int32_t delta_x) {
+      std::lock_guard<std::mutex> lock(event_mutex);
+      const auto post_start = std::chrono::steady_clock::now();
+      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_y, delta_x);
+      if (!event) {
+        return;
+      }
+      CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
+      if (momentum_phase != 0) {
+        CGEventSetIntegerValueField(event, kCGScrollWheelEventMomentumPhase, momentum_phase);
+      } else {
+        CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
+      }
+      CGEventPost(kCGHIDEventTap, event);
+      CFRelease(event);
+      if (scroll_diagnostics_enabled) {
+        const auto post_duration_us = static_cast<uint64_t>(
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - post_start).count() * 1'000'000.0
+        );
+        scroll_diagnostics.post_duration_samples.fetch_add(1, std::memory_order_relaxed);
+        scroll_diagnostics.post_duration_total_us.fetch_add(post_duration_us, std::memory_order_relaxed);
+        auto previous_post_max = scroll_diagnostics.post_duration_max_us.load(std::memory_order_relaxed);
+        while (previous_post_max < post_duration_us && !scroll_diagnostics.post_duration_max_us.compare_exchange_weak(
+                 previous_post_max, post_duration_us, std::memory_order_relaxed)) {
+        }
+        scroll_diagnostics.output_events.fetch_add(1, std::memory_order_relaxed);
+        const auto now = std::chrono::steady_clock::now();
+        if (last_output_time.time_since_epoch().count() != 0) {
+          const auto interval_us = static_cast<uint64_t>(
+            std::chrono::duration<double>(now - last_output_time).count() * 1'000'000.0
+          );
+          scroll_diagnostics.output_interval_samples.fetch_add(1, std::memory_order_relaxed);
+          scroll_diagnostics.output_interval_total_us.fetch_add(interval_us, std::memory_order_relaxed);
+          auto previous_max = scroll_diagnostics.output_interval_max_us.load(std::memory_order_relaxed);
+          while (previous_max < interval_us && !scroll_diagnostics.output_interval_max_us.compare_exchange_weak(
+                   previous_max, interval_us, std::memory_order_relaxed)) {
+          }
+        }
+        last_output_time = now;
+      }
+      if (scroll_diagnostics_trace) {
+        BOOST_LOG(info) << "macOS scroll trace: output phase=" << phase
+                        << " momentum_phase=" << momentum_phase
+                        << " dy=" << delta_y << " dx=" << delta_x;
       }
     }
 
+    /**
+     * @brief Convert a high-resolution wheel delta while retaining fractional pixels.
+     *
+     * @param distance High-resolution wheel distance.
+     * @param remainder Fractional pixels retained between events.
+     * @return Integral pixel delta suitable for CGEvent.
+     */
+    int32_t to_pixel_delta(int32_t distance, double &remainder) {
+      constexpr double PIXELS_PER_TICK = 44.0;  // Slightly more sensitive than the default 40 pixels.
+      remainder += (static_cast<double>(distance) / 120.0) * PIXELS_PER_TICK;
+      const auto delta = static_cast<int32_t>(std::trunc(remainder));
+      remainder -= delta;
+      return delta;
+    }
+
     void scroll_inertia_loop() {
-      constexpr auto FRAME_DURATION = std::chrono::milliseconds(8); // ~120fps matching iPad Pro display
-      constexpr double FRICTION = 0.95; // smooth natural decay
-      constexpr double MIN_VELOCITY = 0.5; // pixel stop threshold
-      // If no packet arrives for 25ms (packet rate is ~8ms on iPad), user has released!
+      constexpr auto FRAME_DURATION = std::chrono::nanoseconds(16'666'667);
+      constexpr double FRICTION_PER_SECOND = 5.5;
+      // Avoid a visibly stepped tail when integer pixel output becomes too sparse.
+      constexpr double MIN_VELOCITY = 12.0;
+      // This is only a fallback for clients that do not provide an explicit end phase.
       constexpr auto RELEASE_THRESHOLD = std::chrono::milliseconds(25);
 
+      // Keep interactive scroll momentum responsive when the service is otherwise idle.
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
       while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
+        report_scroll_diagnostics(std::chrono::steady_clock::now());
         std::unique_lock<std::mutex> lock(scroll_mutex);
 
         // Wait until there is an active scroll or stop requested
@@ -64,13 +215,9 @@ namespace platf::macos {
           continue;
         }
 
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_scroll_time);
-
-        // Still receiving touch packets from iPad within 25ms
-        if (elapsed < RELEASE_THRESHOLD) {
-          lock.unlock();
-          std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        const auto release_at = last_scroll_time + RELEASE_THRESHOLD;
+        if (std::chrono::steady_clock::now() < release_at) {
+          scroll_cv.wait_until(lock, release_at);
           continue;
         }
 
@@ -78,132 +225,212 @@ namespace platf::macos {
         double vy = scroll_velocity_y;
         double vx = scroll_velocity_x;
         scroll_in_progress = false;
+        const bool start_momentum = std::abs(vy) > MIN_VELOCITY || std::abs(vx) > MIN_VELOCITY;
+        momentum_active = start_momentum;
+        lock.unlock();
 
         // 1. Close touch gesture cleanly
-        log_scroll_event("GESTURE_END", 0, 0, 0, kCGScrollPhaseEnded, elapsed.count());
-        CGEventRef end_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
-        CGEventSetIntegerValueField(end_event, kCGScrollWheelEventIsContinuous, 1);
-        CGEventSetIntegerValueField(end_event, kCGScrollWheelEventScrollPhase, kCGScrollPhaseEnded);
-        CGEventPost(kCGHIDEventTap, end_event);
-        CFRelease(end_event);
+        post_event(kCGScrollPhaseEnded, static_cast<CGMomentumScrollPhase>(0), 0, 0);
 
         // 2. If release velocity is significant, seamlessly glide with momentum
-        if (std::abs(vy) > 2.0 || std::abs(vx) > 2.0) {
-          momentum_active = true;
-          log_scroll_event("MOMENTUM_BEGIN", 0, (int32_t)vy, (int32_t)vx, 1, elapsed.count());
+        if (start_momentum) {
+          if (scroll_diagnostics_enabled) {
+            scroll_diagnostics.momentum_started.fetch_add(1, std::memory_order_relaxed);
+          }
+          post_event(static_cast<CGScrollPhase>(0), kCGMomentumScrollPhaseBegin, 0, 0);
 
-          CGEventRef m_begin = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
-          CGEventSetIntegerValueField(m_begin, kCGScrollWheelEventIsContinuous, 1);
-          CGEventSetIntegerValueField(m_begin, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseBegin);
-          CGEventPost(kCGHIDEventTap, m_begin);
-          CFRelease(m_begin);
+          auto previous_frame = std::chrono::steady_clock::now();
+          auto next_frame = previous_frame + FRAME_DURATION;
+          double pending_y = 0.0;
+          double pending_x = 0.0;
+          bool cancelled = false;
 
           while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
-            // If user touches again, abort momentum immediately
-            if (scroll_in_progress) {
+            lock.lock();
+            if (scroll_in_progress || scroll_thread_stop.load(std::memory_order_relaxed)) {
+              cancelled = scroll_in_progress;
+              if (cancelled && scroll_diagnostics_enabled) {
+                scroll_diagnostics.momentum_cancelled.fetch_add(1, std::memory_order_relaxed);
+              }
+              momentum_active = false;
+              lock.unlock();
               break;
             }
+            lock.unlock();
 
-            vy *= FRICTION;
-            vx *= FRICTION;
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed_seconds = std::chrono::duration<double>(now - previous_frame).count();
+            if (scroll_diagnostics_enabled) {
+              const auto frame_interval_us = static_cast<uint64_t>(elapsed_seconds * 1'000'000.0);
+              scroll_diagnostics.frame_interval_samples.fetch_add(1, std::memory_order_relaxed);
+              scroll_diagnostics.frame_interval_total_us.fetch_add(frame_interval_us, std::memory_order_relaxed);
+              auto previous_frame_max = scroll_diagnostics.frame_interval_max_us.load(std::memory_order_relaxed);
+              while (previous_frame_max < frame_interval_us && !scroll_diagnostics.frame_interval_max_us.compare_exchange_weak(
+                       previous_frame_max, frame_interval_us, std::memory_order_relaxed)) {
+              }
+            }
+            previous_frame = now;
+            const auto decay = std::exp(-FRICTION_PER_SECOND * elapsed_seconds);
+            vy *= decay;
+            vx *= decay;
 
             if (std::abs(vy) < MIN_VELOCITY && std::abs(vx) < MIN_VELOCITY) {
               break;
             }
 
-            int32_t step_y = static_cast<int32_t>(std::round(vy));
-            int32_t step_x = static_cast<int32_t>(std::round(vx));
+            pending_y += vy * elapsed_seconds;
+            pending_x += vx * elapsed_seconds;
+            const int32_t step_y = static_cast<int32_t>(std::trunc(pending_y));
+            const int32_t step_x = static_cast<int32_t>(std::trunc(pending_x));
+            pending_y -= step_y;
+            pending_x -= step_x;
 
-            if (step_y != 0 || step_x != 0) {
-              CGEventRef m_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, step_y, step_x);
-              CGEventSetIntegerValueField(m_event, kCGScrollWheelEventIsContinuous, 1);
-              CGEventSetIntegerValueField(m_event, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseContinue);
-              CGEventPost(kCGHIDEventTap, m_event);
-              CFRelease(m_event);
+            // Keep the momentum phase at a stable cadence even when the integral pixel
+            // delta is zero. This prevents low-speed scrolling from developing long gaps.
+            post_event(static_cast<CGScrollPhase>(0), kCGMomentumScrollPhaseContinue, step_y, step_x);
+
+            std::this_thread::sleep_until(next_frame);
+            const auto frame_now = std::chrono::steady_clock::now();
+            next_frame += FRAME_DURATION;
+            if (next_frame <= frame_now) {
+              next_frame = frame_now + FRAME_DURATION;
             }
 
-            lock.unlock();
-            std::this_thread::sleep_for(FRAME_DURATION);
-            lock.lock();
+            // Check for interruption at the beginning of the next frame. Returning to
+            // the outer loop here would add its idle wait to every momentum interval.
           }
 
+          lock.lock();
+          const bool still_active = momentum_active;
           momentum_active = false;
-          log_scroll_event("MOMENTUM_END", 0, 0, 0, 3, 0);
-
-          CGEventRef m_end = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
-          CGEventSetIntegerValueField(m_end, kCGScrollWheelEventIsContinuous, 1);
-          CGEventSetIntegerValueField(m_end, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseEnd);
-          CGEventPost(kCGHIDEventTap, m_end);
-          CFRelease(m_end);
+          lock.unlock();
+          if (still_active && !cancelled && !scroll_thread_stop.load(std::memory_order_relaxed)) {
+            post_event(static_cast<CGScrollPhase>(0), kCGMomentumScrollPhaseEnd, 0, 0);
+          }
         }
       }
     }
 
-    void post_pixel_scroll(int32_t raw_dist, int32_t delta_y, int32_t delta_x) {
-      std::lock_guard<std::mutex> lock(scroll_mutex);
+    void post_pixel_scroll(int32_t delta_y, int32_t delta_x) {
+      std::unique_lock<std::mutex> lock(scroll_mutex);
       auto now = std::chrono::steady_clock::now();
-      int64_t dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_scroll_time).count();
+      const bool had_scroll = scroll_in_progress;
+      const auto sample_dt = std::chrono::duration<double>(now - last_scroll_time).count();
 
-      // If momentum was running, user touch aborts it
-      if (momentum_active) {
-        momentum_active = false;
+      if (scroll_diagnostics_enabled) {
+        scroll_diagnostics.input_events.fetch_add(1, std::memory_order_relaxed);
+        if (had_scroll && sample_dt > 0.0) {
+          const auto interval_us = static_cast<uint64_t>(sample_dt * 1'000'000.0);
+          scroll_diagnostics.interval_samples.fetch_add(1, std::memory_order_relaxed);
+          scroll_diagnostics.interval_total_us.fetch_add(interval_us, std::memory_order_relaxed);
+          auto previous_max = scroll_diagnostics.interval_max_us.load(std::memory_order_relaxed);
+          while (previous_max < interval_us && !scroll_diagnostics.interval_max_us.compare_exchange_weak(
+                   previous_max, interval_us, std::memory_order_relaxed)) {
+          }
+        }
       }
 
-      CGScrollPhase phase = scroll_in_progress ? kCGScrollPhaseChanged : kCGScrollPhaseBegan;
+      CGScrollPhase phase = had_scroll ? kCGScrollPhaseChanged : kCGScrollPhaseBegan;
+      if (!had_scroll) {
+        scroll_velocity_y = 0.0;
+        scroll_velocity_x = 0.0;
+        momentum_active = false;
+        // Do not count the idle time between independent gestures as output jitter.
+        std::lock_guard<std::mutex> event_lock(event_mutex);
+        last_output_time = {};
+      }
       scroll_in_progress = true;
       last_scroll_time = now;
 
-      // Responsive velocity tracking (weighted towards latest release frames)
-      constexpr double ALPHA = 0.7;
-      scroll_velocity_y = (scroll_velocity_y * (1.0 - ALPHA)) + (delta_y * ALPHA);
-      scroll_velocity_x = (scroll_velocity_x * (1.0 - ALPHA)) + (delta_x * ALPHA);
+      if (had_scroll && sample_dt > 0.0) {
+        constexpr double ALPHA = 0.7;
+        scroll_velocity_y = (scroll_velocity_y * (1.0 - ALPHA)) + (delta_y / sample_dt * ALPHA);
+        scroll_velocity_x = (scroll_velocity_x * (1.0 - ALPHA)) + (delta_x / sample_dt * ALPHA);
+      }
+      const auto velocity_y = scroll_velocity_y;
+      const auto velocity_x = scroll_velocity_x;
 
-      log_scroll_event("SCROLL", raw_dist, delta_y, delta_x, phase, dt_ms);
-
-      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_y, delta_x);
-      CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
-      CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
-      CGEventPost(kCGHIDEventTap, event);
-      CFRelease(event);
+      lock.unlock();
+      if (scroll_diagnostics_trace) {
+        BOOST_LOG(info) << "macOS scroll trace: input phase=" << phase
+                        << " dy=" << delta_y << " dx=" << delta_x
+                        << " interval=" << sample_dt * 1000.0 << "ms"
+                        << " velocity_y=" << velocity_y
+                        << " velocity_x=" << velocity_x;
+      }
+      post_event(phase, static_cast<CGMomentumScrollPhase>(0), delta_y, delta_x);
 
       scroll_cv.notify_one();
     }
   }
 
   void init_smooth_scroll() {
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex);
+    if (!scroll_thread_initialized) {
+      {
+        std::lock_guard<std::mutex> state_lock(scroll_mutex);
+        scroll_in_progress = false;
+        momentum_active = false;
+        scroll_velocity_y = 0.0;
+        scroll_velocity_x = 0.0;
+        pixel_remainder_y = 0.0;
+        pixel_remainder_x = 0.0;
+      }
+      const auto *diagnostics_value = std::getenv("LUMEN_SCROLL_DIAGNOSTICS");
+      scroll_diagnostics_enabled = config::input.macos_smooth_scrolling_diagnostics || diagnostics_value != nullptr;
+      scroll_diagnostics_trace = diagnostics_value != nullptr && std::string_view {diagnostics_value} == "trace";
+      last_diagnostics_report = std::chrono::steady_clock::now();
+      last_output_time = {};
       scroll_thread_stop.store(false, std::memory_order_relaxed);
       scroll_inertia_thread = std::thread(scroll_inertia_loop);
-    });
+      scroll_thread_initialized = true;
+    }
   }
 
   void shutdown_smooth_scroll() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex);
+    if (!scroll_thread_initialized) {
+      return;
+    }
     scroll_thread_stop.store(true, std::memory_order_relaxed);
     scroll_cv.notify_all();
     if (scroll_inertia_thread.joinable()) {
       scroll_inertia_thread.join();
     }
+    {
+      std::lock_guard<std::mutex> state_lock(scroll_mutex);
+      scroll_in_progress = false;
+      momentum_active = false;
+      scroll_velocity_y = 0.0;
+      scroll_velocity_x = 0.0;
+      pixel_remainder_y = 0.0;
+      pixel_remainder_x = 0.0;
+    }
+    scroll_thread_initialized = false;
   }
 
   void scroll(int high_res_distance) {
-    constexpr double PIXELS_PER_TICK = 40.0;
-    double pixel_delta = (static_cast<double>(high_res_distance) / 120.0) * PIXELS_PER_TICK;
-    int32_t delta_int = static_cast<int32_t>(std::round(pixel_delta));
-    if (delta_int == 0 && high_res_distance != 0) {
-      delta_int = high_res_distance > 0 ? 1 : -1;
+    int32_t delta_int;
+    {
+      std::lock_guard<std::mutex> lock(scroll_mutex);
+      if (!scroll_in_progress) {
+        pixel_remainder_y = 0.0;
+      }
+      delta_int = to_pixel_delta(high_res_distance, pixel_remainder_y);
     }
-    post_pixel_scroll(high_res_distance, delta_int, 0);
+    post_pixel_scroll(delta_int, 0);
   }
 
   void hscroll(int high_res_distance) {
-    constexpr double PIXELS_PER_TICK = 40.0;
-    double pixel_delta = (static_cast<double>(high_res_distance) / 120.0) * PIXELS_PER_TICK;
-    int32_t delta_int = static_cast<int32_t>(std::round(pixel_delta));
-    if (delta_int == 0 && high_res_distance != 0) {
-      delta_int = high_res_distance > 0 ? 1 : -1;
+    int32_t delta_int;
+    {
+      std::lock_guard<std::mutex> lock(scroll_mutex);
+      if (!scroll_in_progress) {
+        pixel_remainder_x = 0.0;
+      }
+      delta_int = to_pixel_delta(high_res_distance, pixel_remainder_x);
     }
-    post_pixel_scroll(high_res_distance, 0, delta_int);
+    post_pixel_scroll(0, delta_int);
   }
 
 }  // namespace platf::macos

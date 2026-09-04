@@ -293,6 +293,7 @@ namespace config {
 
     bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
     bool macos_smooth_scrolling;  ///< Enable pixel-based smooth scrolling on macOS.
+    bool macos_smooth_scrolling_diagnostics;  ///< Log macOS smooth-scrolling diagnostics.
     bool native_pen_touch;  ///< Enable native pen and touch injection.
   };
 

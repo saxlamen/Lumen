@@ -862,6 +862,7 @@ namespace config {
     true,  // always send scancodes
     true,  // high resolution scrolling
     true,  // macos_smooth_scrolling
+    false,  // macos_smooth_scrolling_diagnostics
     true,  // native pen/touch support
   };
 
@@ -1807,6 +1808,7 @@ namespace config {
 
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
     bool_f(vars, "macos_smooth_scrolling", input.macos_smooth_scrolling);
+    bool_f(vars, "macos_smooth_scrolling_diagnostics", input.macos_smooth_scrolling_diagnostics);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
 
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);

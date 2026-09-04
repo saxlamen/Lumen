@@ -2,12 +2,12 @@
 # this file will also load platform specific macros
 
 if(APPLE AND NOT SUNSHINE_BUILD_HOMEBREW)
-    add_executable(sunshine MACOSX_BUNDLE ${SUNSHINE_TARGET_FILES})
+    add_executable(lumen MACOSX_BUNDLE ${SUNSHINE_TARGET_FILES})
 else()
-    add_executable(sunshine ${SUNSHINE_TARGET_FILES})
+    add_executable(lumen ${SUNSHINE_TARGET_FILES})
 endif()
 foreach(dep ${SUNSHINE_TARGET_DEPENDENCIES})
-    add_dependencies(sunshine ${dep})  # compile these before sunshine
+    add_dependencies(lumen ${dep})  # compile these before lumen
 endforeach()
 
 # platform specific target definitions
@@ -23,9 +23,9 @@ elseif(UNIX)
     endif()
 endif()
 
-target_link_libraries(sunshine ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
-target_compile_definitions(sunshine PUBLIC ${SUNSHINE_DEFINITIONS})
-set_target_properties(sunshine PROPERTIES OUTPUT_NAME "lumen")
+target_link_libraries(lumen ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
+target_compile_definitions(lumen PUBLIC ${SUNSHINE_DEFINITIONS})
+set_target_properties(lumen PROPERTIES OUTPUT_NAME "lumen")
 
 # CLion complains about unknown flags after running cmake, and cannot add symbols to the index for cuda files
 if(CUDA_INHERIT_COMPILE_OPTIONS)
@@ -34,8 +34,8 @@ if(CUDA_INHERIT_COMPILE_OPTIONS)
     endforeach()
 endif()
 
-target_compile_options(sunshine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${SUNSHINE_COMPILE_OPTIONS}>;$<$<COMPILE_LANGUAGE:CUDA>:${SUNSHINE_COMPILE_OPTIONS_CUDA};-std=c++17>)  # cmake-lint: disable=C0301
-target_link_options(sunshine PRIVATE ${SUNSHINE_LINK_OPTIONS})
+target_compile_options(lumen PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${SUNSHINE_COMPILE_OPTIONS}>;$<$<COMPILE_LANGUAGE:CUDA>:${SUNSHINE_COMPILE_OPTIONS_CUDA};-std=c++17>)  # cmake-lint: disable=C0301
+target_link_options(lumen PRIVATE ${SUNSHINE_LINK_OPTIONS})
 
 # Homebrew build fails the vite build if we set these environment variables
 if(${SUNSHINE_BUILD_HOMEBREW})

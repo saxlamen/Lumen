@@ -1,5 +1,5 @@
 # windows specific packaging
-install(TARGETS sunshine RUNTIME DESTINATION "." COMPONENT application)
+install(TARGETS lumen RUNTIME DESTINATION "." COMPONENT application)
 
 # Hardening: include zlib1.dll (loaded via LoadLibrary() in openssl's libcrypto.a)
 install(FILES "${ZLIB}" DESTINATION "." COMPONENT application)

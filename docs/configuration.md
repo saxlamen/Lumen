@@ -666,6 +666,30 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### macos_smooth_scrolling_diagnostics
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When enabled, Sunshine logs one-second macOS scrolling statistics. Set the
+            <code>LUMEN_SCROLL_DIAGNOSTICS=trace</code> environment variable for per-event tracing.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            macos_smooth_scrolling_diagnostics = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### native_pen_touch
 
 <table>

@@ -18,7 +18,7 @@ else()
     set(MAC_BUNDLE_CONTENTS "${MAC_BUNDLE_NAME}/Contents")
     set(MAC_BUNDLE_RESOURCES "${MAC_BUNDLE_CONTENTS}/Resources")
 
-    install(TARGETS sunshine
+    install(TARGETS lumen
         BUNDLE DESTINATION .
         COMPONENT Runtime)
 
@@ -30,11 +30,11 @@ else()
         unset(_sunshine_module_path)
 
         qt6_generate_deploy_script(
-            TARGET sunshine
+            TARGET lumen
             OUTPUT_SCRIPT SUNSHINE_QT_DEPLOY_SCRIPT
             CONTENT "
 qt6_deploy_runtime_dependencies(
-    EXECUTABLE \"$<TARGET_FILE_NAME:sunshine>.app\"
+    EXECUTABLE \"$<TARGET_FILE_NAME:lumen>.app\"
     NO_APP_STORE_COMPLIANCE
     NO_TRANSLATIONS
     DEPLOY_TOOL_OPTIONS -no-codesign
