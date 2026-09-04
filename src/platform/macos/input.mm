@@ -59,6 +59,9 @@ namespace platf {
     // scroll phase & inertia tracking for macOS native momentum
     std::chrono::steady_clock::time_point last_scroll_time {};
     bool scroll_in_progress {};
+    bool momentum_active {};
+    double scroll_velocity_y {};
+    double scroll_velocity_x {};
     std::mutex scroll_mutex {};
     std::condition_variable scroll_cv {};
     std::atomic<bool> scroll_thread_stop {false};
@@ -574,11 +577,17 @@ const KeyCodeMap kKeyCodesMap[] = {
   }
 
   void scroll_inertia_loop(macos_input_t *macos_input) {
+    constexpr auto FRAME_DURATION = std::chrono::milliseconds(8); // ~120fps matching iPad Pro display
+    constexpr double FRICTION = 0.95; // smooth natural decay
+    constexpr double MIN_VELOCITY = 0.5; // pixel stop threshold
+    // If no packet arrives for 25ms (packet rate is ~8ms on iPad), user has released!
+    constexpr auto RELEASE_THRESHOLD = std::chrono::milliseconds(25);
+
     while (!macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
       std::unique_lock<std::mutex> lock(macos_input->scroll_mutex);
 
       // Wait until there is an active scroll or stop requested
-      macos_input->scroll_cv.wait_for(lock, std::chrono::milliseconds(100), [&] {
+      macos_input->scroll_cv.wait_for(lock, std::chrono::milliseconds(15), [&] {
         return macos_input->scroll_thread_stop.load(std::memory_order_relaxed) || macos_input->scroll_in_progress;
       });
 
@@ -593,24 +602,75 @@ const KeyCodeMap kKeyCodesMap[] = {
       auto now = std::chrono::steady_clock::now();
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - macos_input->last_scroll_time);
 
-      // Give ample time (250ms) for trackpads / iPadOS / client-side inertial packets to stream continuously.
-      // If packets are still arriving, let client-side inertia flow smoothly without cutting it off.
-      if (elapsed < std::chrono::milliseconds(250)) {
+      // Still receiving touch packets from iPad within 25ms
+      if (elapsed < RELEASE_THRESHOLD) {
         lock.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
         continue;
       }
 
-      // True release / pause detected: gracefully close the gesture stream
+      // User released fingers! Immediately take over momentum with zero freeze
+      double vy = macos_input->scroll_velocity_y;
+      double vx = macos_input->scroll_velocity_x;
       macos_input->scroll_in_progress = false;
 
-      // Post Gesture Ended event so macOS finishes rubber-banding / scrolling cleanly
+      // 1. Close touch gesture cleanly
       log_scroll_event("GESTURE_END", 0, 0, 0, kCGScrollPhaseEnded, elapsed.count());
       CGEventRef end_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventIsContinuous, 1);
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventScrollPhase, kCGScrollPhaseEnded);
       CGEventPost(kCGHIDEventTap, end_event);
       CFRelease(end_event);
+
+      // 2. If release velocity is significant, seamlessly glide with momentum
+      if (std::abs(vy) > 2.0 || std::abs(vx) > 2.0) {
+        macos_input->momentum_active = true;
+        log_scroll_event("MOMENTUM_BEGIN", 0, (int32_t)vy, (int32_t)vx, 1, elapsed.count());
+
+        CGEventRef m_begin = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
+        CGEventSetIntegerValueField(m_begin, kCGScrollWheelEventIsContinuous, 1);
+        CGEventSetIntegerValueField(m_begin, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseBegin);
+        CGEventPost(kCGHIDEventTap, m_begin);
+        CFRelease(m_begin);
+
+        while (!macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
+          // If user touches again, abort momentum immediately
+          if (macos_input->scroll_in_progress) {
+            break;
+          }
+
+          vy *= FRICTION;
+          vx *= FRICTION;
+
+          if (std::abs(vy) < MIN_VELOCITY && std::abs(vx) < MIN_VELOCITY) {
+            break;
+          }
+
+          int32_t step_y = static_cast<int32_t>(std::round(vy));
+          int32_t step_x = static_cast<int32_t>(std::round(vx));
+
+          if (step_y != 0 || step_x != 0) {
+            CGEventRef m_event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, step_y, step_x);
+            CGEventSetIntegerValueField(m_event, kCGScrollWheelEventIsContinuous, 1);
+            CGEventSetIntegerValueField(m_event, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseContinue);
+            CGEventPost(kCGHIDEventTap, m_event);
+            CFRelease(m_event);
+          }
+
+          lock.unlock();
+          std::this_thread::sleep_for(FRAME_DURATION);
+          lock.lock();
+        }
+
+        macos_input->momentum_active = false;
+        log_scroll_event("MOMENTUM_END", 0, 0, 0, 3, 0);
+
+        CGEventRef m_end = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, 0, 0);
+        CGEventSetIntegerValueField(m_end, kCGScrollWheelEventIsContinuous, 1);
+        CGEventSetIntegerValueField(m_end, kCGScrollWheelEventMomentumPhase, kCGMomentumScrollPhaseEnd);
+        CGEventPost(kCGHIDEventTap, m_end);
+        CFRelease(m_end);
+      }
     }
   }
 
@@ -619,9 +679,19 @@ const KeyCodeMap kKeyCodesMap[] = {
     auto now = std::chrono::steady_clock::now();
     int64_t dt_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - macos_input->last_scroll_time).count();
 
+    // If momentum was running, user touch aborts it
+    if (macos_input->momentum_active) {
+      macos_input->momentum_active = false;
+    }
+
     CGScrollPhase phase = macos_input->scroll_in_progress ? kCGScrollPhaseChanged : kCGScrollPhaseBegan;
     macos_input->scroll_in_progress = true;
     macos_input->last_scroll_time = now;
+
+    // Responsive velocity tracking (weighted towards latest release frames)
+    constexpr double ALPHA = 0.7;
+    macos_input->scroll_velocity_y = (macos_input->scroll_velocity_y * (1.0 - ALPHA)) + (delta_y * ALPHA);
+    macos_input->scroll_velocity_x = (macos_input->scroll_velocity_x * (1.0 - ALPHA)) + (delta_x * ALPHA);
 
     log_scroll_event("SCROLL", raw_dist, delta_y, delta_x, phase, dt_ms);
 
