@@ -202,6 +202,9 @@ namespace config {
       workarounds_t wa;  ///< Display-device compatibility workarounds.
     } dd;  ///< Display-device integration settings.
 
+    std::string virtual_display;  ///< "enabled" or "disabled" — whether to create on-demand virtual displays (macOS only).
+    bool show_cursor;  ///< Whether to show the cursor in the captured stream.
+
     int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
   };
@@ -289,6 +292,7 @@ namespace config {
     bool always_send_scancodes;  ///< Always send keyboard scancodes when available.
 
     bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
+    bool macos_smooth_scrolling;  ///< Enable pixel-based smooth scrolling on macOS.
     bool native_pen_touch;  ///< Enable native pen and touch injection.
   };
 
@@ -408,4 +412,5 @@ namespace config {
    * @return Parsed configuration key-value entries.
    */
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
+  void save_show_cursor(bool show_cursor);
 }  // namespace config

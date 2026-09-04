@@ -859,6 +859,21 @@ namespace display_device {
     // want to revert active configuration in case we have any
   }
 
+  void create_virtual_display([[maybe_unused]] const config::video_t &video_config, [[maybe_unused]] const rtsp_stream::launch_session_t &session) {
+#ifdef __APPLE__
+    if (video_config.virtual_display == "enabled" && session.width > 0 && session.height > 0 && session.fps > 0) {
+      auto vd_id = platf::virtual_display_create(session.width, session.height, session.fps);
+      if (vd_id != 0) {
+        BOOST_LOG(info) << "Created virtual display " << vd_id << " (" << session.width << "x" << session.height << "@" << session.fps << "Hz)";
+        // Give the window server time to register the display before capture
+        std::this_thread::sleep_for(5s);
+      } else {
+        BOOST_LOG(warning) << "Failed to create virtual display, falling back to existing display";
+      }
+    }
+#endif
+  }
+
   void configure_display(const SingleDisplayConfiguration &config) {
     std::lock_guard lock {DD_DATA.mutex};
     if (!DD_DATA.sm_instance) {

@@ -187,6 +187,15 @@ const config = ref(props.config)
               default="true"
     ></Checkbox>
 
+    <!-- macOS Smooth Scrolling support -->
+    <Checkbox v-if="config.mouse === 'enabled'"
+              class="mb-3"
+              id="macos_smooth_scrolling"
+              locale-prefix="config"
+              v-model="config.macos_smooth_scrolling"
+              default="true"
+    ></Checkbox>
+
     <!-- Native pen/touch support -->
     <Checkbox v-if="config.mouse === 'enabled'"
               class="mb-3"

@@ -1354,9 +1354,23 @@ namespace platf {
   bool has_elevated_privileges(bool all_caps);
 
   /**
-   * @brief Drop elevated privileges (e.g. system admin/nice etc.)
-   * @param all_caps Bool that specifies whether to drop all caps or only CAP_SYS_ADMIN
+   * @brief Create an on-demand virtual display with the specified resolution and framerate.
+   * @param width Display width in pixels.
+   * @param height Display height in pixels.
+   * @param fps Refresh rate in Hz.
+   * @return The display ID of the created display, or 0 on failure.
    */
-  void drop_elevated_privileges(bool all_caps);
+  std::uint32_t virtual_display_create(int width, int height, int fps);
+
+  /**
+   * @brief Destroy the currently active virtual display.
+   */
+  void virtual_display_destroy();
+
+  /**
+   * @brief Get the display ID of the currently active virtual display.
+   * @return The display ID, or 0 if no virtual display is active.
+   */
+  std::uint32_t virtual_display_get_id();
 
 }  // namespace platf

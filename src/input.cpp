@@ -435,6 +435,8 @@ namespace input {
     switch (keyCode) {
       case 0x4E /* VKEY_N */:
         display_cursor = !display_cursor;
+        config::save_show_cursor(display_cursor);
+        mail::man->event<bool>(mail::switch_cursor)->raise(display_cursor);
         return 1;
     }
 
@@ -1218,7 +1220,7 @@ namespace input {
       return;
     }
 
-    if (config::input.high_resolution_scrolling) {
+    if (config::input.high_resolution_scrolling || config::input.macos_smooth_scrolling) {
       platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));
     } else {
       input->accumulated_vscroll_delta += util::endian::big(packet->scrollAmt1);
@@ -1241,7 +1243,7 @@ namespace input {
       return;
     }
 
-    if (config::input.high_resolution_scrolling) {
+    if (config::input.high_resolution_scrolling || config::input.macos_smooth_scrolling) {
       platf::hscroll(platf_input, util::endian::big(packet->scrollAmount));
     } else {
       input->accumulated_hscroll_delta += util::endian::big(packet->scrollAmount);
