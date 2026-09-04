@@ -492,24 +492,11 @@ const KeyCodeMap kKeyCodesMap[] = {
     return kCGEventMouseMoved;
   }
 
-  static void stop_scroll_momentum(macos_input_t *macos_input) {
-    if (macos_input->momentum_active || macos_input->scroll_in_progress) {
-      std::lock_guard<std::mutex> lock(macos_input->scroll_mutex);
-      macos_input->momentum_active = false;
-      macos_input->scroll_in_progress = false;
-      macos_input->scroll_velocity_y = 0;
-      macos_input->scroll_velocity_x = 0;
-    }
-  }
-
   void move_mouse(
     input_t &input,
     const int deltaX,
     const int deltaY
   ) {
-    const auto macos_input = static_cast<macos_input_t *>(input.get());
-    stop_scroll_momentum(macos_input);
-
     const auto current = get_mouse_loc(input);
 
     const auto location = util::point_t {current.x + deltaX, current.y + deltaY};
@@ -539,11 +526,10 @@ const KeyCodeMap kKeyCodesMap[] = {
   }
 
   void button_mouse(input_t &input, const int button, const bool release) {
-    const auto macos_input = static_cast<macos_input_t *>(input.get());
-    stop_scroll_momentum(macos_input);
-
     CGMouseButton mac_button;
     CGEventType event;
+
+    const auto macos_input = static_cast<macos_input_t *>(input.get());
 
     switch (button) {
       case 1:
@@ -648,8 +634,8 @@ const KeyCodeMap kKeyCodesMap[] = {
         CFRelease(m_begin);
 
         while (!macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
-          // If user touches again or moves mouse/clicks, abort momentum immediately
-          if (!macos_input->momentum_active || macos_input->scroll_in_progress) {
+          // If user touches again, abort momentum immediately
+          if (macos_input->scroll_in_progress) {
             break;
           }
 
