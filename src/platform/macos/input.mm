@@ -561,6 +561,18 @@ const KeyCodeMap kKeyCodesMap[] = {
     macos_input->last_mouse_event[mac_button][release] = now;
   }
 
+  static void log_scroll_event(const char *type, int32_t raw_dist, int32_t delta_y, int32_t delta_x, int phase, int64_t dt_ms) {
+    static std::ofstream log_file("/tmp/lumen_scroll.log", std::ios::app);
+    if (log_file.is_open()) {
+      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+      ).count();
+      log_file << ms << " [" << type << "] raw=" << raw_dist
+               << " dy=" << delta_y << " dx=" << delta_x
+               << " phase=" << phase << " dt=" << dt_ms << "ms" << std::endl;
+    }
+  }
+
   void scroll_inertia_loop(macos_input_t *macos_input) {
     while (!macos_input->scroll_thread_stop.load(std::memory_order_relaxed)) {
       std::unique_lock<std::mutex> lock(macos_input->scroll_mutex);
@@ -599,18 +611,6 @@ const KeyCodeMap kKeyCodesMap[] = {
       CGEventSetIntegerValueField(end_event, kCGScrollWheelEventScrollPhase, kCGScrollPhaseEnded);
       CGEventPost(kCGHIDEventTap, end_event);
       CFRelease(end_event);
-    }
-  }
-
-  static void log_scroll_event(const char *type, int32_t raw_dist, int32_t delta_y, int32_t delta_x, int phase, int64_t dt_ms) {
-    static std::ofstream log_file("/tmp/lumen_scroll.log", std::ios::app);
-    if (log_file.is_open()) {
-      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-      ).count();
-      log_file << ms << " [" << type << "] raw=" << raw_dist
-               << " dy=" << delta_y << " dx=" << delta_x
-               << " phase=" << phase << " dt=" << dt_ms << "ms" << std::endl;
     }
   }
 
