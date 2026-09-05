@@ -666,6 +666,34 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### macos_smooth_scrolling
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When enabled on macOS, Sunshine converts high-resolution scroll input into
+            pixel-based Core Graphics events and provides host-side inertia. The current
+            Moonlight scroll packet does not identify whether the source is a trackpad,
+            Magic Mouse, or traditional mouse wheel, so all scroll devices use the same
+            behavior. Device-specific handling would require a protocol extension or a
+            heuristic and is intentionally not enabled.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            macos_smooth_scrolling = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### macos_smooth_scrolling_diagnostics
 
 <table>
