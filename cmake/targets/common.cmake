@@ -25,7 +25,10 @@ endif()
 
 target_link_libraries(lumen ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
 target_compile_definitions(lumen PUBLIC ${SUNSHINE_DEFINITIONS})
-set_target_properties(lumen PROPERTIES OUTPUT_NAME "lumen")
+# Bundle output must match the executable and app names configured by macOS packaging.
+if(NOT APPLE OR SUNSHINE_BUILD_HOMEBREW)
+    set_target_properties(lumen PROPERTIES OUTPUT_NAME "lumen")
+endif()
 
 # CLion complains about unknown flags after running cmake, and cannot add symbols to the index for cuda files
 if(CUDA_INHERIT_COMPILE_OPTIONS)

@@ -43,6 +43,7 @@ INPUT = ../README.md \
         ../DOCKER_README.md \
         third_party_packages.md \
         gamestream_migration.md \
+        macos_migration.md \
         legal.md \
         configuration.md \
         app_examples.md \

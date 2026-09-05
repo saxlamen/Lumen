@@ -219,6 +219,14 @@ watch(
               default="true"
     ></Checkbox>
 
+    <Checkbox v-if="platform === 'macos' && config.mouse === 'enabled'"
+              class="mb-3"
+              id="macos_smooth_scrolling_diagnostics"
+              locale-prefix="config"
+              v-model="config.macos_smooth_scrolling_diagnostics"
+              default="false"
+    ></Checkbox>
+
     <!-- Native pen/touch support -->
     <Checkbox v-if="config.mouse === 'enabled'"
               class="mb-3"

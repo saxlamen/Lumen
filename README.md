@@ -1,3 +1,5 @@
+> Lumen macOS users: see the [migration and validation notes](docs/macos_migration.md) before replacing an existing installation.
+
 <div align="center">
   <img
     src="sunshine.svg"

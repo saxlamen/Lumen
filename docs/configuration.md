@@ -728,7 +728,7 @@ supported on the current platform.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            disabled
+            enabled
             @endcode</td>
     </tr>
     <tr>
@@ -854,9 +854,12 @@ supported on the current platform.
             <br>
             **macOS:**
             <br>
-            Sunshine can only access microphones on macOS due to system limitations.
-            To stream system audio use
-            [Soundflower](https://github.com/mattingalls/Soundflower) or
+            Leave audio_sink empty to capture system audio using Core Audio, with
+            ScreenCaptureKit as a fallback if initialization fails. The legacy aliases
+            system, desktop, and screencapturekit are also accepted, ignoring case.
+            Core Audio honors the client's host-audio playback setting; the
+            ScreenCaptureKit fallback cannot mute host speakers.
+            An explicit input device name selects AVFoundation capture, including
             [BlackHole](https://github.com/ExistentialAudio/BlackHole).
             <br>
             <br>
@@ -1494,6 +1497,48 @@ supported on the current platform.
               ]
             }@endcode
         </td>
+    </tr>
+</table>
+
+### virtual_display
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">On macOS, create a virtual display matching the client's resolution and refresh rate when a stream starts. The vd_helper executable must be installed beside the host executable.</td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            virtual_display = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### show_cursor
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">Include the host cursor in the captured stream. Existing explicit values remain unchanged on upgrade.</td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            show_cursor = disabled
+            @endcode</td>
     </tr>
 </table>
 
