@@ -253,7 +253,7 @@ namespace platf::macos {
 
       if (scroll_diagnostics_enabled) {
         scroll_diagnostics.input_events.fetch_add(1, std::memory_order_relaxed);
-        if (last_input_time.time_since_epoch().count() != 0 && sample_dt > 0.0) {
+        if (last_input_time.time_since_epoch().count() != 0 && sample_dt > 0.0 && sample_dt <= 0.1) {
           const auto interval_us = static_cast<uint64_t>(sample_dt * 1'000'000.0);
           scroll_diagnostics.interval_samples.fetch_add(1, std::memory_order_relaxed);
           scroll_diagnostics.interval_total_us.fetch_add(interval_us, std::memory_order_relaxed);
