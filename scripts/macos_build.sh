@@ -94,8 +94,8 @@ function run_step_cmake() {
 
   # prepare CMAKE args
   cmake_args=(
-    "-B=build"
-    "-S=."
+    "-B=${build_dir}"
+    "-S=${script_dir}/.."
     "-DBUILD_DOCS=${build_docs}"
     "-DBUILD_TESTS=${build_tests}"
     "-DBUILD_WERROR=ON"
@@ -110,7 +110,7 @@ function run_step_cmake() {
 
   if [[ -n "${sign_app}" ]]; then
     if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
-      cmake_args+=("-DAPPLE_CODESIGN_IDENTITY='${APPLE_CODESIGN_IDENTITY}'")
+      cmake_args+=("-DAPPLE_CODESIGN_IDENTITY=${APPLE_CODESIGN_IDENTITY}")
     else
       echo "Please set the APPLE_CODESIGN_IDENTITY environment variable or use --skip-codesign"
       exit 1
@@ -119,17 +119,17 @@ function run_step_cmake() {
 
   # Publisher metadata
   if [[ -n "$publisher_name" ]]; then
-    cmake_args+=("-DSUNSHINE_PUBLISHER_NAME='${publisher_name}'")
+    cmake_args+=("-DSUNSHINE_PUBLISHER_NAME=${publisher_name}")
   fi
   if [[ -n "$publisher_website" ]]; then
-    cmake_args+=("-DSUNSHINE_PUBLISHER_WEBSITE='${publisher_website}'")
+    cmake_args+=("-DSUNSHINE_PUBLISHER_WEBSITE=${publisher_website}")
   fi
   if [[ -n "$publisher_issue_url" ]]; then
-    cmake_args+=("-DSUNSHINE_PUBLISHER_ISSUE_URL='${publisher_issue_url}'")
+    cmake_args+=("-DSUNSHINE_PUBLISHER_ISSUE_URL=${publisher_issue_url}")
   fi
 
   # Cmake stuff here
-  mkdir -p "build"
+  mkdir -p "${build_dir}"
   echo "cmake args:"
   echo "${cmake_args[@]}"
   cmake "${cmake_args[@]}"
@@ -245,7 +245,7 @@ shift $((OPTIND -1))
 
 # get directory of this script
 script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-build_dir="$script_dir/../build"
+build_dir="$script_dir/../cmake-build-macos-app"
 echo "Script Directory: $script_dir"
 echo "Build Directory: $build_dir"
 mkdir -p "$build_dir"

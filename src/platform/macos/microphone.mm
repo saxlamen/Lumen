@@ -6,7 +6,9 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/macos/audio_capture.h"
 #include "src/platform/macos/av_audio.h"
+#include "src/platform/macos/sc_audio.h"
 
 namespace platf {
   using namespace std::literals;
@@ -64,6 +66,62 @@ namespace platf {
   };
 
   /**
+   * @brief System audio capture using ScreenCaptureKit (macOS 12.3+)
+   */
+  struct sc_mic_t: public mic_t {
+    SCAudioCapture *sc_audio_capture API_AVAILABLE(macos(12.3)) {};  ///< ScreenCaptureKit capture session.
+
+    /**
+     * @brief Release the fallback capture session.
+     */
+    ~sc_mic_t() override {
+      if (@available(macOS 12.3, *)) {
+        [sc_audio_capture release];
+      }
+    }
+
+    /**
+     * @brief Read a complete audio frame with a bounded wait for shutdown.
+     * @param sample_in Destination interleaved float samples.
+     * @return Capture status, including timeout when no full frame arrives.
+     */
+    capture_e sample(std::vector<float> &sample_in) override {
+      if (@available(macOS 12.3, *)) {
+        auto sample_size = sample_in.size();
+
+        uint32_t length = 0;
+        TPCircularBuffer *buffer = [sc_audio_capture getAudioBuffer];
+        void *byteSampleBuffer = TPCircularBufferTail(buffer, &length);
+
+        int wait_count = 0;
+        while (length < sample_size * sizeof(float)) {
+          if (!sc_audio_capture.isCapturing) {
+            return capture_e::error;
+          }
+          [sc_audio_capture.samplesArrivedSignal lock];
+          [sc_audio_capture.samplesArrivedSignal waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+          [sc_audio_capture.samplesArrivedSignal unlock];
+          byteSampleBuffer = TPCircularBufferTail(buffer, &length);
+          // After 500ms of no data, return timeout so the caller can check shutdown_event
+          if (++wait_count > 5 && length < sample_size * sizeof(float)) {
+            return capture_e::timeout;
+          }
+        }
+
+        const float *sampleBuffer = (float *) byteSampleBuffer;
+        std::vector<float> vectorBuffer(sampleBuffer, sampleBuffer + sample_size);
+
+        std::copy_n(std::begin(vectorBuffer), sample_size, std::begin(sample_in));
+
+        TPCircularBufferConsume(buffer, (uint32_t) sample_size * sizeof(float));
+
+        return capture_e::ok;
+      }
+      return capture_e::error;
+    }
+  };
+
+  /**
    * @brief macOS audio control state used to create microphone streams.
    */
   struct macos_audio_control_t: public audio_control_t {
@@ -100,13 +158,27 @@ namespace platf {
       mic->av_audio_capture.hostAudioEnabled = host_audio_enabled ? YES : NO;
       BOOST_LOG(debug) << "Set hostAudioEnabled to: "sv << (host_audio_enabled ? "YES" : "NO");
 
-      if (config::audio.sink.empty()) {
+      if (macos::is_system_audio_sink(config::audio.sink)) {
         // Use macOS system-wide audio tap
         BOOST_LOG(info) << "Using macOS system audio tap for capture."sv;
         BOOST_LOG(info) << "Sample rate: "sv << sample_rate << ", Frame size: "sv << frame_size << ", Channels: "sv << channels;
 
         if ([mic->av_audio_capture setupSystemTap:sample_rate frameSize:frame_size channels:channels]) {
-          BOOST_LOG(error) << "Failed to setup system audio tap."sv;
+          BOOST_LOG(warning) << "System audio tap failed; trying ScreenCaptureKit audio capture."sv;
+          // Release any partial aggregate device before starting the fallback.
+          mic.reset();
+          if (@available(macOS 12.3, *)) {
+            auto fallback = std::make_unique<sc_mic_t>();
+            fallback->sc_audio_capture = [[SCAudioCapture alloc] init];
+            if (fallback->sc_audio_capture && [fallback->sc_audio_capture startCaptureWithSampleRate:sample_rate
+                                                                                            channels:channels] == 0) {
+              if (!host_audio_enabled) {
+                BOOST_LOG(warning) << "ScreenCaptureKit fallback cannot mute host audio."sv;
+              }
+              return fallback;
+            }
+          }
+          BOOST_LOG(error) << "Both system audio capture backends failed."sv;
           return nullptr;
         }
       } else {

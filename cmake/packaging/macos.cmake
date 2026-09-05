@@ -1,6 +1,7 @@
 # macos specific packaging
 
 if (SUNSHINE_BUILD_HOMEBREW)
+    install(TARGETS vd_helper RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
     install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/macos/assets/"
             DESTINATION "${SUNSHINE_ASSETS_DIR}")
 
@@ -17,6 +18,10 @@ else()
     set(MAC_BUNDLE_NAME "${CMAKE_PROJECT_NAME}.app")
     set(MAC_BUNDLE_CONTENTS "${MAC_BUNDLE_NAME}/Contents")
     set(MAC_BUNDLE_RESOURCES "${MAC_BUNDLE_CONTENTS}/Resources")
+
+    install(TARGETS vd_helper
+        RUNTIME DESTINATION "${MAC_BUNDLE_CONTENTS}/MacOS"
+        COMPONENT Runtime)
 
     install(TARGETS lumen
         BUNDLE DESTINATION .
@@ -118,6 +123,16 @@ qt6_deploy_runtime_dependencies(
                       message(FATAL_ERROR \"codesign failed while signing library: \${item}\")
                   endif()
               endforeach()
+          endif()
+
+          # Sign the nested helper before sealing the app bundle.
+          execute_process(COMMAND /usr/bin/codesign --verbose=2
+              --sign \"${APPLE_CODESIGN_IDENTITY}\" \"\${_app}/Contents/MacOS/vd_helper\"
+              --force --timestamp --options=runtime
+              RESULT_VARIABLE helper_rc
+          )
+          if(NOT helper_rc EQUAL 0)
+              message(FATAL_ERROR \"codesign failed while signing vd_helper\")
           endif()
 
           # Sign the app last

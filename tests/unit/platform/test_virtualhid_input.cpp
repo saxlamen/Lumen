@@ -840,6 +840,12 @@ TEST_F(VirtualHidDeviceTest, TranslatesPenButtonsToolsAndTransitions) {
 }
 
 TEST_F(VirtualHidDeviceTest, PlatformWrappersForwardToVirtualHidContext) {
+  // Exercise the regular backend without posting native scroll events to the desktop.
+  const auto smooth_scrolling = config::input.macos_smooth_scrolling;
+  config::input.macos_smooth_scrolling = false;
+  auto restore_scrolling = util::fail_guard([smooth_scrolling] {
+    config::input.macos_smooth_scrolling = smooth_scrolling;
+  });
   auto platform_input = platf::input();
   ASSERT_TRUE(platform_input);
   auto &platform_context = platf::virtualhid::get_input_context(platform_input);

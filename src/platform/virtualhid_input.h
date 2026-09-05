@@ -17,6 +17,10 @@
 // local includes
 #include "src/platform/common.h"
 
+namespace platf::macos {
+  class gamepad_device_t;
+}
+
 namespace platf::virtualhid {
 
   /**
@@ -45,6 +49,9 @@ namespace platf::virtualhid {
      */
     void refresh_mouse();
 
+#ifdef __APPLE__
+    std::vector<std::shared_ptr<macos::gamepad_device_t>> macos_gamepads {static_cast<std::size_t>(MAX_GAMEPADS)};  ///< Native macOS controllers and keyboard/mouse fallback devices.
+#endif
     std::unique_ptr<lvh::Runtime> runtime;  ///< libvirtualhid runtime.
     std::unique_ptr<lvh::Keyboard> keyboard;  ///< Shared virtual keyboard.
     std::unique_ptr<lvh::Mouse> mouse;  ///< Shared virtual mouse.

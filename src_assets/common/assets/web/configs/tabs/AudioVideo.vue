@@ -85,6 +85,21 @@ const config = ref(props.config)
       :config="config"
     />
 
+    <Checkbox v-if="platform === 'macos'"
+              class="mb-3"
+              id="virtual_display"
+              locale-prefix="config"
+              v-model="config.virtual_display"
+              default="true"
+    ></Checkbox>
+    <Checkbox v-if="platform === 'macos'"
+              class="mb-3"
+              id="show_cursor"
+              locale-prefix="config"
+              v-model="config.show_cursor"
+              default="true"
+    ></Checkbox>
+
     <DisplayDeviceOptions
       :platform="platform"
       :config="config"

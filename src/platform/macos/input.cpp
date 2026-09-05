@@ -47,14 +47,12 @@ namespace platf {
     return caps;
   }
 
-  std::vector<supported_gamepad_t> &supported_gamepads(input_t *input) {
-    static std::vector<supported_gamepad_t> gamepads;
-    if (!input || !input->get()) {
-      gamepads = virtualhid::static_supported_gamepads();
-      return gamepads;
-    }
-
-    gamepads = virtualhid::supported_gamepads(virtualhid::get_input_context(*input).runtime.get());
+  std::vector<supported_gamepad_t> &supported_gamepads(input_t * /*input*/) {
+    // macOS provides an Xbox-style HID controller with keyboard/mouse fallback.
+    static std::vector<supported_gamepad_t> gamepads {
+      {"auto", true, ""},
+      {"x360", true, ""},
+    };
     return gamepads;
   }
 

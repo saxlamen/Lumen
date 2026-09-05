@@ -30,7 +30,8 @@ struct ProcessSystemAudioIOProcTestParams {
  * @brief Test suite for AVAudio class functionality.
  * Parameterized test class for testing Core Audio system tap functionality.
  */
-class AVAudioTest: public PlatformTestSuite, public ::testing::WithParamInterface<ProcessSystemAudioIOProcTestParams> {};
+// These buffer/converter tests do not capture the screen or require Accessibility permission.
+class AVAudioTest: public ::testing::Test, public ::testing::WithParamInterface<ProcessSystemAudioIOProcTestParams> {};
 
 /**
  * @brief Test that findMicrophone handles nil input gracefully.

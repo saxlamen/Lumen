@@ -53,7 +53,7 @@ namespace platf {
      * @brief Forward a captured AVFoundation frame to FFmpeg without copying.
      *
      * @param img Image or frame object to read from or populate.
-     * @return Conversion status.
+     * @return Zero on success, or minus one when the captured pixel buffer is missing.
      */
     int convert(img_t &img) override;
     /**

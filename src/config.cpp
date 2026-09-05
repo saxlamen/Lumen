@@ -791,7 +791,7 @@ namespace config {
     },  // display_device
 
     "enabled"s,  // virtual_display
-    false,  // show_cursor
+    true,  // show_cursor
 
     0,  // max_bitrate
     0  // minimum_fps_target (0 = framerate)

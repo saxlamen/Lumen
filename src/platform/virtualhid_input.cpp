@@ -1066,7 +1066,7 @@ namespace platf {
     virtualhid::pen_update(virtualhid::get_client_context(input), touch_port, pen);
   }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     return virtualhid::alloc_gamepad(virtualhid::get_input_context(input), id, metadata, std::move(feedback_queue));
   }
