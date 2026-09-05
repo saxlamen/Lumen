@@ -21,9 +21,6 @@ namespace platf::macos {
 
   namespace {
     std::chrono::steady_clock::time_point last_input_time {};
-    bool scroll_in_progress = false;
-    double scroll_velocity_y = 0.0;
-    double scroll_velocity_x = 0.0;
     double pixel_remainder_y = 0.0;
     double pixel_remainder_x = 0.0;
 
@@ -50,8 +47,6 @@ namespace platf::macos {
       std::atomic<uint64_t> interval_samples {0};  ///< Number of measured input intervals.
       std::atomic<uint64_t> interval_total_us {0};  ///< Sum of measured input intervals.
       std::atomic<uint64_t> interval_max_us {0};  ///< Largest measured input interval.
-      std::atomic<uint64_t> momentum_started {0};  ///< Number of host-side inertia phases.
-      std::atomic<uint64_t> momentum_cancelled {0};  ///< Number of interrupted inertia phases.
     } scroll_diagnostics;
     bool scroll_diagnostics_enabled = false;
     bool scroll_diagnostics_trace = false;
@@ -80,8 +75,6 @@ namespace platf::macos {
       const auto interval_samples = scroll_diagnostics.interval_samples.exchange(0);
       const auto interval_total_us = scroll_diagnostics.interval_total_us.exchange(0);
       const auto interval_max_us = scroll_diagnostics.interval_max_us.exchange(0);
-      const auto momentum_started = scroll_diagnostics.momentum_started.exchange(0);
-      const auto momentum_cancelled = scroll_diagnostics.momentum_cancelled.exchange(0);
       const auto average_interval_ms = interval_samples == 0
         ? 0.0
         : static_cast<double>(interval_total_us) / interval_samples / 1000.0;
@@ -100,9 +93,7 @@ namespace platf::macos {
                       << " max_output_interval=" << static_cast<double>(output_interval_max_us) / 1000.0 << "ms"
                       << " avg_post_duration=" << average_post_duration_ms << "ms"
                       << " max_post_duration=" << static_cast<double>(post_duration_max_us) / 1000.0 << "ms"
-                      << " mode=host_inertia"
-                      << " momentum_started=" << momentum_started
-                      << " momentum_cancelled=" << momentum_cancelled;
+                      << " mode=immediate";
     }
 
     /**
@@ -176,72 +167,15 @@ namespace platf::macos {
     }
 
     void scroll_inertia_loop() {
-      constexpr auto RELEASE_THRESHOLD = std::chrono::milliseconds(25);
-      constexpr auto FRAME_DURATION = std::chrono::milliseconds(8);
-      constexpr double FRICTION_PER_SECOND = 5.5;
-      constexpr double MIN_VELOCITY = 12.0;
-
-      // Host-side fallback for clients that do not generate inertia themselves.
+      // RustDesk generates inertia on the sending side. The macOS receiver only
+      // reports diagnostics here and never delays or synthesizes scroll events.
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
         report_scroll_diagnostics(std::chrono::steady_clock::now());
         std::unique_lock<std::mutex> lock(scroll_mutex);
-        scroll_cv.wait_for(lock, RELEASE_THRESHOLD, [&] {
-          return scroll_thread_stop.load(std::memory_order_relaxed) || scroll_in_progress;
+        scroll_cv.wait_for(lock, std::chrono::milliseconds(100), [&] {
+          return scroll_thread_stop.load(std::memory_order_relaxed);
         });
-        if (scroll_thread_stop.load(std::memory_order_relaxed)) {
-          break;
-        }
-        if (!scroll_in_progress || std::chrono::steady_clock::now() - last_input_time < RELEASE_THRESHOLD) {
-          continue;
-        }
-
-        auto velocity_y = scroll_velocity_y;
-        auto velocity_x = scroll_velocity_x;
-        scroll_in_progress = false;
-        const bool start_momentum = std::abs(velocity_y) > MIN_VELOCITY || std::abs(velocity_x) > MIN_VELOCITY;
-        lock.unlock();
-        if (!start_momentum) {
-          continue;
-        }
-
-        if (scroll_diagnostics_enabled) {
-          scroll_diagnostics.momentum_started.fetch_add(1, std::memory_order_relaxed);
-        }
-        double pending_y = 0.0;
-        double pending_x = 0.0;
-        auto previous_frame = std::chrono::steady_clock::now();
-        while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
-          lock.lock();
-          const bool interrupted = scroll_in_progress;
-          lock.unlock();
-          if (interrupted) {
-            if (scroll_diagnostics_enabled) {
-              scroll_diagnostics.momentum_cancelled.fetch_add(1, std::memory_order_relaxed);
-            }
-            break;
-          }
-
-          const auto now = std::chrono::steady_clock::now();
-          const auto elapsed = std::chrono::duration<double>(now - previous_frame).count();
-          previous_frame = now;
-          velocity_y *= std::exp(-FRICTION_PER_SECOND * elapsed);
-          velocity_x *= std::exp(-FRICTION_PER_SECOND * elapsed);
-          if (std::abs(velocity_y) < MIN_VELOCITY && std::abs(velocity_x) < MIN_VELOCITY) {
-            break;
-          }
-
-          pending_y += velocity_y * elapsed;
-          pending_x += velocity_x * elapsed;
-          const auto step_y = static_cast<int32_t>(std::trunc(pending_y));
-          const auto step_x = static_cast<int32_t>(std::trunc(pending_x));
-          pending_y -= step_y;
-          pending_x -= step_x;
-          if (step_y != 0 || step_x != 0) {
-            post_event(static_cast<CGScrollPhase>(0), static_cast<CGMomentumScrollPhase>(0), step_y, step_x);
-          }
-          std::this_thread::sleep_for(FRAME_DURATION);
-        }
       }
     }
 
@@ -249,7 +183,6 @@ namespace platf::macos {
       std::unique_lock<std::mutex> lock(scroll_mutex);
       const auto now = std::chrono::steady_clock::now();
       const auto sample_dt = std::chrono::duration<double>(now - last_input_time).count();
-      const bool had_scroll = scroll_in_progress;
 
       if (scroll_diagnostics_enabled) {
         scroll_diagnostics.input_events.fetch_add(1, std::memory_order_relaxed);
@@ -269,18 +202,6 @@ namespace platf::macos {
         std::lock_guard<std::mutex> event_lock(event_mutex);
         last_output_time = {};
       }
-      if (!had_scroll) {
-        scroll_velocity_y = 0.0;
-        scroll_velocity_x = 0.0;
-      }
-      if (sample_dt > 0.0) {
-        constexpr double ALPHA = 0.7;
-        scroll_velocity_y = (scroll_velocity_y * (1.0 - ALPHA)) + (delta_y / sample_dt * ALPHA);
-        scroll_velocity_x = (scroll_velocity_x * (1.0 - ALPHA)) + (delta_x / sample_dt * ALPHA);
-      }
-      const auto velocity_y = scroll_velocity_y;
-      const auto velocity_x = scroll_velocity_x;
-      scroll_in_progress = true;
       last_input_time = now;
 
       lock.unlock();
@@ -288,12 +209,9 @@ namespace platf::macos {
         BOOST_LOG(info) << "macOS scroll trace: input phase=none"
                         << " dy=" << delta_y << " dx=" << delta_x
                         << " interval=" << sample_dt * 1000.0 << "ms"
-                        << " velocity_y=" << velocity_y
-                        << " velocity_x=" << velocity_x
-                        << " mode=host_inertia";
+                        << " mode=immediate";
       }
       post_event(static_cast<CGScrollPhase>(0), static_cast<CGMomentumScrollPhase>(0), delta_y, delta_x);
-      scroll_cv.notify_one();
     }
   }
 
@@ -302,9 +220,6 @@ namespace platf::macos {
     if (!scroll_thread_initialized) {
       {
         std::lock_guard<std::mutex> state_lock(scroll_mutex);
-        scroll_in_progress = false;
-        scroll_velocity_y = 0.0;
-        scroll_velocity_x = 0.0;
         pixel_remainder_y = 0.0;
         pixel_remainder_x = 0.0;
       }
@@ -332,9 +247,6 @@ namespace platf::macos {
     }
     {
       std::lock_guard<std::mutex> state_lock(scroll_mutex);
-      scroll_in_progress = false;
-      scroll_velocity_y = 0.0;
-      scroll_velocity_x = 0.0;
       pixel_remainder_y = 0.0;
       pixel_remainder_x = 0.0;
     }
