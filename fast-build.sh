@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+## @file fast-build.sh
+## @brief Build and deploy Lumen with the macOS system tray enabled by default.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -6,6 +8,8 @@ BUILD_DIR="${BUILD_DIR:-cmake-build-macos}"
 LUMEN_BIN="$(brew --prefix lumen)/bin/lumen"
 
 cd "$REPO_DIR"
+
+bash "$REPO_DIR/scripts/configure-prebuilt-ffmpeg.sh"
 
 echo "==> Checking build directory: $BUILD_DIR"
 if [[ ! -f "$BUILD_DIR/CMakeCache.txt" || ! -f "$BUILD_DIR/Makefile" ]]; then
@@ -15,7 +19,7 @@ if [[ ! -f "$BUILD_DIR/CMakeCache.txt" || ! -f "$BUILD_DIR/Makefile" ]]; then
     -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
     -DSUNSHINE_ASSETS_DIR="$(brew --prefix lumen)/lumen/assets" \
     -DSUNSHINE_BUILD_HOMEBREW=ON \
-    -DSUNSHINE_ENABLE_TRAY=OFF \
+    -DSUNSHINE_ENABLE_TRAY=ON \
     -DBUILD_TESTS=OFF \
     -DBUILD_DOCS=OFF \
     -DBOOST_USE_STATIC=OFF
