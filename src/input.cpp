@@ -1224,6 +1224,10 @@ namespace input {
       return;
     }
 
+    if (config::input.macos_smooth_scrolling_diagnostics) {
+      BOOST_LOG(info) << "macOS scroll input: axis=y distance=" << util::endian::big(packet->scrollAmt1)
+                      << " path=" << (config::input.macos_smooth_scrolling ? "smooth" : "virtualhid");
+    }
     if (config::input.high_resolution_scrolling || config::input.macos_smooth_scrolling) {
       platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));
     } else {
@@ -1247,6 +1251,10 @@ namespace input {
       return;
     }
 
+    if (config::input.macos_smooth_scrolling_diagnostics) {
+      BOOST_LOG(info) << "macOS scroll input: axis=x distance=" << util::endian::big(packet->scrollAmount)
+                      << " path=" << (config::input.macos_smooth_scrolling ? "smooth" : "virtualhid");
+    }
     if (config::input.high_resolution_scrolling || config::input.macos_smooth_scrolling) {
       platf::hscroll(platf_input, util::endian::big(packet->scrollAmount));
     } else {
