@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-## @file fast-build.sh
+## @file build.sh
 ## @brief Build and deploy Lumen with the macOS system tray enabled by default.
+## @details Initialize macOS application dependencies without recursive documentation,
+## test, or FFmpeg source downloads. This script builds with documentation and tests disabled.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -10,6 +12,16 @@ LUMEN_BIN="$(brew --prefix lumen)/bin/lumen"
 cd "$REPO_DIR"
 
 bash "$REPO_DIR/scripts/configure-prebuilt-ffmpeg.sh"
+# @brief Fetch application libraries only; their standalone docs/tests are not built here.
+git submodule update --init -- \
+  third-party/Simple-Web-Server \
+  third-party/TPCircularBuffer \
+  third-party/lizardbyte-common \
+  third-party/libdisplaydevice \
+  third-party/libvirtualhid \
+  third-party/moonlight-common-c \
+  third-party/tray
+git -C third-party/moonlight-common-c submodule update --init -- enet nanors
 
 echo "==> Checking build directory: $BUILD_DIR"
 if [[ ! -f "$BUILD_DIR/CMakeCache.txt" || ! -f "$BUILD_DIR/Makefile" ]]; then
