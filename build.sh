@@ -44,6 +44,13 @@ echo "==> Deploying binary to $LUMEN_BIN..."
 brew services stop lumen 2>/dev/null || true
 install -m 755 "$BUILD_DIR/lumen" "$LUMEN_BIN"
 
+echo "==> Deploying assets..."
+ASSETS_DEST="$(brew --prefix lumen)/lumen/assets"
+mkdir -p "$ASSETS_DEST"
+if [[ -d "$BUILD_DIR/assets" ]]; then
+  cp -R "$BUILD_DIR/assets/" "$ASSETS_DEST/"
+fi
+
 echo "==> Signing binary..."
 SIGN_IDENTITY="${APPLE_CODESIGN_IDENTITY:-}"
 if [[ -z "$SIGN_IDENTITY" ]]; then
