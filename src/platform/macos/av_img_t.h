@@ -13,6 +13,54 @@
 
 namespace platf {
   /**
+   * @brief Return the byte size of a single pixel in plane 0 of a CoreVideo pixel format.
+   *
+   * Packed formats that are not explicitly handled are reported as 32-bit, matching the
+   * historical behaviour for the BGRA frames produced by the capture backends.
+   *
+   * @param format CoreVideo pixel format four-character code.
+   * @return Number of bytes occupied by one pixel of plane 0.
+   */
+  inline int pixel_pitch_for_format(OSType format) {
+    switch (format) {
+      case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+      case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+      case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:
+      case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:
+      case kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange:
+      case kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:
+        return 1;
+
+      case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:
+      case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:
+      case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:
+      case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:
+      case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:
+      case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:
+        return 2;
+
+      default:
+        return 4;
+    }
+  }
+
+  /**
+   * @brief Fill the geometry fields of an image from a CoreVideo pixel buffer.
+   *
+   * Plane 0 row pitch is used so that planar (NV12/P010) buffers report the stride of the luma
+   * plane instead of a value derived from a packed pixel count.
+   *
+   * @param img Image to update.
+   * @param buffer Pixel buffer describing the frame.
+   */
+  inline void fill_img_geometry(img_t *img, CVPixelBufferRef buffer) {
+    img->width = (int) CVPixelBufferGetWidth(buffer);
+    img->height = (int) CVPixelBufferGetHeight(buffer);
+    img->row_pitch = (int) CVPixelBufferGetBytesPerRowOfPlane(buffer, 0);
+    img->pixel_pitch = pixel_pitch_for_format(CVPixelBufferGetPixelFormatType(buffer));
+  }
+
+  /**
    * @brief CoreMedia sample buffer retained by an AV image wrapper.
    */
   struct av_sample_buf_t {

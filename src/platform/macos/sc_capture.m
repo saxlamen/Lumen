@@ -5,8 +5,16 @@
  */
 #import "sc_capture.h"
 
+// system includes
+#import <Block.h>
+#import <os/lock.h>
+
 API_AVAILABLE(macos(12.3))
-@implementation SCCapture
+@implementation SCCapture {
+  /// Guards the scalar capture settings and the cached frame/callbacks, which are written from
+  /// the capture and encoder threads and read on the ScreenCaptureKit sample queues.
+  os_unfair_lock _stateLock;
+}
 
 + (BOOL)isAvailable {
     if (@available(macOS 12.3, *)) {
@@ -51,6 +59,8 @@ API_AVAILABLE(macos(12.3))
     if (self) {
         CGDisplayModeRef mode = CGDisplayCopyDisplayMode(displayID);
 
+        _stateLock = (os_unfair_lock) OS_UNFAIR_LOCK_INIT;
+
         self.displayID = displayID;
         self.frameRate = frameRate;
         self.pixelFormat = kCVPixelFormatType_32BGRA;
@@ -71,7 +81,6 @@ API_AVAILABLE(macos(12.3))
             DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, DISPATCH_QUEUE_PRIORITY_HIGH);
         self.videoQueue = dispatch_queue_create("dev.lizardbyte.sunshine.videoQueue", qos);
         self.audioQueue = dispatch_queue_create("dev.lizardbyte.sunshine.audioQueue", qos);
-        self.deliveryQueue = dispatch_queue_create("dev.lizardbyte.sunshine.deliveryQueue", qos);
 
         // Initialize ScreenCaptureKit
         dispatch_semaphore_t initSemaphore = dispatch_semaphore_create(0);
@@ -101,9 +110,37 @@ API_AVAILABLE(macos(12.3))
     [super dealloc];
 }
 
+- (void)setFrameWidth:(int)frameWidth {
+    os_unfair_lock_lock(&_stateLock);
+    _frameWidth = frameWidth;
+    os_unfair_lock_unlock(&_stateLock);
+}
+
+- (void)setFrameHeight:(int)frameHeight {
+    os_unfair_lock_lock(&_stateLock);
+    _frameHeight = frameHeight;
+    os_unfair_lock_unlock(&_stateLock);
+}
+
+- (void)setPixelFormat:(OSType)pixelFormat {
+    os_unfair_lock_lock(&_stateLock);
+    _pixelFormat = pixelFormat;
+    os_unfair_lock_unlock(&_stateLock);
+}
+
+- (void)setStopping:(BOOL)stopping {
+    os_unfair_lock_lock(&_stateLock);
+    _stopping = stopping;
+    os_unfair_lock_unlock(&_stateLock);
+}
+
 - (void)setFrameWidth:(int)frameWidth frameHeight:(int)frameHeight {
-    self.frameWidth = frameWidth;
-    self.frameHeight = frameHeight;
+    // Write the pair as one update: nv12_zero_device calls this from the encoder thread while the
+    // capture thread may be building an SCStreamConfiguration.
+    os_unfair_lock_lock(&_stateLock);
+    _frameWidth = frameWidth;
+    _frameHeight = frameHeight;
+    os_unfair_lock_unlock(&_stateLock);
 }
 
 - (SCDisplay *)findDisplayWithID:(CGDirectDisplayID)displayID {
@@ -179,12 +216,32 @@ API_AVAILABLE(macos(12.3))
 
         // Configure the stream
         SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
-        config.width = self.frameWidth;
-        config.height = self.frameHeight;
-        config.minimumFrameInterval = CMTimeMake(1, self.frameRate);
-        config.pixelFormat = self.pixelFormat;
-        config.queueDepth = 5;
-        config.showsCursor = self.showsCursor;
+
+        // Snapshot the settings as one consistent set: nv12_zero_device can change the capture
+        // size/format from the encoder thread while the capture thread starts a new stream.
+        int captureWidth;
+        int captureHeight;
+        int captureFrameRate;
+        OSType capturePixelFormat;
+        BOOL captureShowsCursor;
+
+        os_unfair_lock_lock(&_stateLock);
+        captureWidth = _frameWidth;
+        captureHeight = _frameHeight;
+        captureFrameRate = _frameRate;
+        capturePixelFormat = _pixelFormat;
+        captureShowsCursor = _showsCursor;
+        os_unfair_lock_unlock(&_stateLock);
+
+        config.width = captureWidth;
+        config.height = captureHeight;
+        config.minimumFrameInterval = CMTimeMake(1, captureFrameRate);
+        config.pixelFormat = capturePixelFormat;
+        // The capture thread keeps a pool of images plus frames in flight through the encoder.
+        // A queue shallower than that lets ScreenCaptureKit recycle buffers that are still
+        // referenced, so the encoder would read recycled pixels.
+        config.queueDepth = 16;
+        config.showsCursor = captureShowsCursor;
 
         // Enable audio capture - this is the key feature!
         if (self.captureAudio) {
@@ -245,11 +302,8 @@ API_AVAILABLE(macos(12.3))
 
 - (void)stopCapture {
     @synchronized(self) {
-        // Cancel the frame delivery timer first
-        if (self.frameDeliveryTimer) {
-            dispatch_source_cancel(self.frameDeliveryTimer);
-            self.frameDeliveryTimer = nil;
-        }
+        // Reject queued frame deliveries before tearing anything down
+        self.stopping = YES;
 
         if (self.stream) {
             dispatch_semaphore_t stopSemaphore = dispatch_semaphore_create(0);
@@ -282,7 +336,9 @@ API_AVAILABLE(macos(12.3))
 
 - (void)updateShowsCursor:(BOOL)showsCursor {
     @synchronized(self) {
+        os_unfair_lock_lock(&_stateLock);
         _showsCursor = showsCursor;
+        os_unfair_lock_unlock(&_stateLock);
         // If stream is already running, we need to restart it to apply the new setting
         if (self.stream) {
             // Save current callback blocks
@@ -325,37 +381,58 @@ API_AVAILABLE(macos(12.3))
 
     if (type == SCStreamOutputTypeScreen) {
         CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-        if (!pixelBuffer) {
-            // Null frame — re-deliver cached frame to fill gaps
-            @synchronized(self) {
-                if (self.lastValidSampleBuffer && !self.stopping && self.videoCallback) {
-                    self.videoCallback(self.lastValidSampleBuffer);
+
+        // Take our own references to the callback and the sample buffer under the lock, then
+        // deliver outside of it: stopCapture can be called from another thread at any point, and
+        // it releases both the callback and the cached sample buffer.
+        VideoFrameCallbackBlock callback = nil;
+        CMSampleBufferRef delivered = NULL;
+
+        @synchronized(self) {
+            if (pixelBuffer) {
+                if (self.lastValidSampleBuffer) {
+                    CFRelease(self.lastValidSampleBuffer);
                 }
+                self.lastValidSampleBuffer = (CMSampleBufferRef) CFRetain(sampleBuffer);
             }
+
+            CMSampleBufferRef cached = pixelBuffer ? sampleBuffer : self.lastValidSampleBuffer;
+            if (cached && !self.stopping && self.videoCallback) {
+                callback = Block_copy(self.videoCallback);
+                delivered = (CMSampleBufferRef) CFRetain(cached);
+            }
+        }
+
+        if (!callback || !delivered) {
             return;
         }
 
-        // Cache this valid frame for re-delivery during idle periods
-        @synchronized(self) {
-            if (self.lastValidSampleBuffer) {
-                CFRelease(self.lastValidSampleBuffer);
-            }
-            self.lastValidSampleBuffer = (CMSampleBufferRef)CFRetain(sampleBuffer);
-        }
+        bool continueCapture = callback(delivered) ? true : false;
 
-        if (self.stopping) return;
-        if (self.videoCallback) {
-            if (!self.videoCallback(sampleBuffer)) {
-                self.stopping = YES;
-                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                    [self stopCapture];
-                });
-            }
+        CFRelease(delivered);
+        Block_release(callback);
+
+        if (!continueCapture) {
+            self.stopping = YES;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                [self stopCapture];
+            });
         }
     } else if (type == SCStreamOutputTypeAudio) {
-        if (self.audioCallback) {
-            self.audioCallback(sampleBuffer);
+        AudioSampleCallbackBlock callback = nil;
+
+        @synchronized(self) {
+            if (!self.stopping && self.audioCallback) {
+                callback = Block_copy(self.audioCallback);
+            }
         }
+
+        if (!callback) {
+            return;
+        }
+
+        callback(sampleBuffer);
+        Block_release(callback);
     }
 }
 

@@ -184,6 +184,10 @@ add_executable(${PROJECT_NAME}
         ${TEST_SOURCES}
         ${SUNSHINE_SOURCES})
 
+# Sources that include generated headers (for example lumen_version.h) are compiled into this
+# target as well as the main executable, so the build directory must be on the include path.
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_BINARY_DIR}")
+
 # Copy files needed for config consistency tests to build directory
 # This ensures both CLI and CLion can access the same files relative to the test executable
 # Using configure_file ensures files are copied when they change between builds

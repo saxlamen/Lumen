@@ -2,14 +2,19 @@
  * @file src/platform/macos/display.mm
  * @brief Definitions for display capture on macOS.
  */
+// system includes
+#include <cstring>
+
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/macos/av_img_t.h"
 #include "src/platform/macos/av_video.h"
+#include "src/platform/macos/capture_guard.h"
 #include "src/platform/macos/misc.h"
 #include "src/platform/macos/nv12_zero_device.h"
+#include "src/utility.h"
 #import "src/platform/macos/sc_capture.h"
 
 // Avoid conflict between AVFoundation and libavutil both defining AVMediaType
@@ -21,6 +26,25 @@ namespace fs = std::filesystem;
 
 namespace platf {
   using namespace std::literals;
+
+  /**
+   * @brief Zero-fill every plane of a locked CoreVideo pixel buffer.
+   *
+   * @param buffer Pixel buffer that is already locked for writing.
+   */
+  static void zero_planes(CVPixelBufferRef buffer) {
+    auto plane_count = CVPixelBufferGetPlaneCount(buffer);
+    if (plane_count == 0) {
+      auto size = (std::size_t) CVPixelBufferGetBytesPerRow(buffer) * (std::size_t) CVPixelBufferGetHeight(buffer);
+      std::memset(CVPixelBufferGetBaseAddress(buffer), 0, size);
+      return;
+    }
+
+    for (auto plane = 0u; plane < plane_count; ++plane) {
+      auto size = (std::size_t) CVPixelBufferGetBytesPerRowOfPlane(buffer, plane) * (std::size_t) CVPixelBufferGetHeightOfPlane(buffer, plane);
+      std::memset(CVPixelBufferGetBaseAddressOfPlane(buffer, plane), 0, size);
+    }
+  }
 
   /**
    * @brief Process a CMSampleBuffer frame into an img_t for the encoder pipeline.
@@ -48,10 +72,7 @@ namespace platf {
     av_img->pixel_buffer = new_pixel_buffer;
     img->data = new_pixel_buffer->data();
 
-    img->width = (int) CVPixelBufferGetWidth(new_pixel_buffer->buf);
-    img->height = (int) CVPixelBufferGetHeight(new_pixel_buffer->buf);
-    img->row_pitch = (int) CVPixelBufferGetBytesPerRow(new_pixel_buffer->buf);
-    img->pixel_pitch = img->row_pitch / img->width;
+    fill_img_geometry(img, new_pixel_buffer->buf);
 
     old_data_retainer = nullptr;
     return true;
@@ -68,23 +89,45 @@ namespace platf {
     }
 
     capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
+      // AVFoundation delivers frames on its own output queue while the polling loop below runs on
+      // the capture thread. Both paths touch the image pool owned by video::captureThread(), so
+      // every callback goes through the guard to keep that pool single threaded. The guard is
+      // owned by an object retained by the capture block, so a late frame cannot call into the
+      // capture thread's callbacks after this function returns.
+      auto guard = [[SunshineCaptureCallbackGuard alloc] initWithPushCallback:push_captured_image_cb pullCallback:pull_free_image_cb];
+      auto guard_release = util::fail_guard([&guard]() {
+        [guard detach];
+        [guard release];
+      });
+
       auto signal = [av_capture capture:^(CMSampleBufferRef sampleBuffer) {
         std::shared_ptr<img_t> img_out;
-        if (!pull_free_image_cb(img_out)) {
+        if (![guard pullImage:&img_out]) {
+          // got interrupt signal
+          // returning false here stops capture backend
           return false;
         }
-        process_frame(sampleBuffer, img_out.get());
-        if (!push_captured_image_cb(std::move(img_out), true)) {
+        if (!process_frame(sampleBuffer, img_out.get())) {
+          return true;  // skip this frame but continue capturing
+        }
+        if (![guard pushImage:&img_out captured:YES]) {
+          // got interrupt signal
+          // returning false here stops capture backend
           return false;
         }
         return true;
       }];
 
+      if (!signal) {
+        BOOST_LOG(error) << "AVFoundation capture failed to start"sv;
+        return capture_e::error;
+      }
+
       // Poll with timeout instead of waiting forever, so the capture thread
       // can respond to session shutdown and not deadlock on teardown.
       while (dispatch_semaphore_wait(signal, dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC)) != 0) {
         std::shared_ptr<img_t> probe_img;
-        if (!pull_free_image_cb(probe_img)) {
+        if (![guard pullImage:&probe_img]) {
           // Session is shutting down. Signal the semaphore so we exit the wait.
           // Don't call stopCapture here — the callback will detect shutdown on its
           // next invocation and do a clean teardown. Force-stopping AVFoundation
@@ -125,13 +168,15 @@ namespace platf {
       int w = av_capture.frameWidth;
       int h = av_capture.frameHeight;
 
+      // Match the pixel format the capture backend is configured for: a dummy frame in a fixed
+      // format would be handed to a zero copy encoder that expects NV12/P010.
       CVPixelBufferRef pixelBuffer = NULL;
       NSDictionary *attrs = @{
         (NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
       };
       CVReturn status = CVPixelBufferCreate(
         kCFAllocatorDefault, w, h,
-        kCVPixelFormatType_32BGRA,
+        av_capture.pixelFormat,
         (__bridge CFDictionaryRef)attrs,
         &pixelBuffer);
 
@@ -141,8 +186,7 @@ namespace platf {
       }
 
       CVPixelBufferLockBaseAddress(pixelBuffer, 0);
-      void *base = CVPixelBufferGetBaseAddress(pixelBuffer);
-      memset(base, 0, CVPixelBufferGetBytesPerRow(pixelBuffer) * h);
+      zero_planes(pixelBuffer);
       CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
 
       auto av_img = (av_img_t *)img;
@@ -164,19 +208,28 @@ namespace platf {
         CFRelease(sampleBuffer);
       }
 
-      CVPixelBufferRelease(pixelBuffer);
+      // Read the geometry before dropping our reference to the pixel buffer
+      fill_img_geometry(img, pixelBuffer);
 
-      img->width = w;
-      img->height = h;
-      img->row_pitch = w * 4;
-      img->pixel_pitch = 4;
+      CVPixelBufferRelease(pixelBuffer);
       return 0;
     }
 
+    /**
+     * @brief Update the AVFoundation capture resolution.
+     *
+     * Called by nv12_zero_device on the encoder thread, so the backend stores the value under its
+     * own lock.
+     */
     static void setResolution(void *display, int width, int height) {
       [static_cast<AVVideo *>(display) setFrameWidth:width frameHeight:height];
     }
 
+    /**
+     * @brief Update the AVFoundation capture pixel format.
+     *
+     * Called by nv12_zero_device on the encoder thread.
+     */
     static void setPixelFormat(void *display, OSType pixelFormat) {
       static_cast<AVVideo *>(display).pixelFormat = pixelFormat;
     }
@@ -196,15 +249,26 @@ namespace platf {
     capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
       sc_capture.showsCursor = *cursor;
 
+      // ScreenCaptureKit delivers frames on its sample handler queue while the polling loop below
+      // runs on the capture thread. Both paths touch the image pool owned by
+      // video::captureThread(), so every callback goes through the guard to keep that pool single
+      // threaded. The guard is owned by an object retained by the capture block, so a frame that
+      // arrives after this function returns cannot call into destroyed callbacks.
+      auto guard = [[SunshineCaptureCallbackGuard alloc] initWithPushCallback:push_captured_image_cb pullCallback:pull_free_image_cb];
+      auto guard_release = util::fail_guard([&guard]() {
+        [guard detach];
+        [guard release];
+      });
+
       auto signal = [sc_capture captureVideo:^(CMSampleBufferRef sampleBuffer) {
         std::shared_ptr<img_t> img_out;
-        if (!pull_free_image_cb(img_out)) {
+        if (![guard pullImage:&img_out]) {
           return false;
         }
         if (!process_frame(sampleBuffer, img_out.get())) {
           return true;  // skip this frame but continue capturing
         }
-        if (!push_captured_image_cb(std::move(img_out), true)) {
+        if (![guard pushImage:&img_out captured:YES]) {
           return false;
         }
         return true;
@@ -224,16 +288,19 @@ namespace platf {
           return capture_e::reinit;
         }
 
-        // Check if session is ending — pull_free_image_cb returns false when
-        // the session is shutting down (capture_ctx_queue->running() == false).
-        // This is needed because SCCapture may not deliver frames on an idle
-        // display, so the video callback never gets a chance to detect shutdown.
+        // Check if the session is ending - a detached guard or a stopped capture context makes
+        // the guarded pull return NO. This is needed because SCCapture may not deliver frames on
+        // an idle display, so the video callback never gets a chance to detect shutdown.
         std::shared_ptr<img_t> probe_img;
-        if (!pull_free_image_cb(probe_img)) {
+        if (![guard pullImage:&probe_img]) {
           [sc_capture stopCapture];
           break;
         }
       }
+
+      // Always stop the stream before returning so that no new frame callback can be scheduled
+      // once the capture thread's callbacks go out of scope. stopCapture is idempotent.
+      [sc_capture stopCapture];
       return capture_e::ok;
     }
 
@@ -266,13 +333,15 @@ namespace platf {
       int w = sc_capture.frameWidth;
       int h = sc_capture.frameHeight;
 
+      // Match the pixel format the capture backend is configured for: a dummy frame in a fixed
+      // format would be handed to a zero copy encoder that expects NV12/P010.
       CVPixelBufferRef pixelBuffer = NULL;
       NSDictionary *attrs = @{
         (NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
       };
       CVReturn status = CVPixelBufferCreate(
         kCFAllocatorDefault, w, h,
-        kCVPixelFormatType_32BGRA,
+        sc_capture.pixelFormat,
         (__bridge CFDictionaryRef)attrs,
         &pixelBuffer);
 
@@ -283,8 +352,7 @@ namespace platf {
 
       // Fill with black
       CVPixelBufferLockBaseAddress(pixelBuffer, 0);
-      void *base = CVPixelBufferGetBaseAddress(pixelBuffer);
-      memset(base, 0, CVPixelBufferGetBytesPerRow(pixelBuffer) * h);
+      zero_planes(pixelBuffer);
       CVPixelBufferUnlockBaseAddress(pixelBuffer, 0);
 
       auto av_img = (av_img_t *)img;
@@ -307,19 +375,28 @@ namespace platf {
         CFRelease(sampleBuffer);
       }
 
-      CVPixelBufferRelease(pixelBuffer);
+      // Read the geometry before dropping our reference to the pixel buffer
+      fill_img_geometry(img, pixelBuffer);
 
-      img->width = w;
-      img->height = h;
-      img->row_pitch = w * 4;
-      img->pixel_pitch = 4;
+      CVPixelBufferRelease(pixelBuffer);
       return 0;
     }
 
+    /**
+     * @brief Update the ScreenCaptureKit capture resolution.
+     *
+     * Called by nv12_zero_device on the encoder thread, so the backend stores the value under its
+     * own lock.
+     */
     static void setResolution(void *display, int width, int height) {
       [static_cast<SCCapture *>(display) setFrameWidth:width frameHeight:height];
     }
 
+    /**
+     * @brief Update the ScreenCaptureKit capture pixel format.
+     *
+     * Called by nv12_zero_device on the encoder thread.
+     */
     static void setPixelFormat(void *display, OSType pixelFormat) {
       static_cast<SCCapture *>(display).pixelFormat = pixelFormat;
     }

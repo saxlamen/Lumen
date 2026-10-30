@@ -35,8 +35,6 @@ typedef void (^AudioSampleCallbackBlock)(CMSampleBufferRef);
 @property (nonatomic, strong) dispatch_semaphore_t captureSignal;
 @property (nonatomic, assign) BOOL stopping;
 @property (nonatomic, assign) CMSampleBufferRef lastValidSampleBuffer;
-@property (nonatomic, strong) dispatch_source_t frameDeliveryTimer;  // 60Hz timer for steady frame delivery
-@property (nonatomic, strong) dispatch_queue_t deliveryQueue;        // queue for the timer
 
 + (NSArray<NSDictionary *> *)displayNames;
 + (NSString *)getDisplayName:(CGDirectDisplayID)displayID;
