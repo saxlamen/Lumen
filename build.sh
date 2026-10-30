@@ -58,9 +58,10 @@ if [[ -z "$SIGN_IDENTITY" ]]; then
 fi
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
-  if ! codesign -s "$SIGN_IDENTITY" --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"; then
-    echo "    Warning: Signing with '$SIGN_IDENTITY' failed (keychain locked?), falling back to ad-hoc signing."
-    codesign -s - --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"
+  if ! codesign -s "$SIGN_IDENTITY" --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN" 2>/dev/null; then
+    echo "    Keychain is locked for codesign. Unlocking login keychain..."
+    security unlock-keychain "$HOME/Library/Keychains/login.keychain-db"
+    codesign -s "$SIGN_IDENTITY" --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"
   fi
 else
   echo "    Warning: Developer certificate not found, using ad-hoc signing."

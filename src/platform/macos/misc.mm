@@ -71,7 +71,18 @@ namespace platf {
    * @brief Check whether screen capture allowed.
    */
   bool is_screen_capture_allowed() {
-    return screen_capture_allowed;
+    if (screen_capture_allowed.load(std::memory_order_relaxed)) {
+      return true;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+#pragma clang diagnostic ignored "-Wtautological-pointer-compare"
+    if (CGPreflightScreenCaptureAccess != nullptr && CGPreflightScreenCaptureAccess()) {
+      screen_capture_allowed.store(true, std::memory_order_relaxed);
+      return true;
+    }
+#pragma clang diagnostic pop
+    return false;
   }
 
   std::unique_ptr<deinit_t> init() {
