@@ -82,7 +82,10 @@ namespace platf {
 
     av_img->sample_buffer = new_sample_buffer;
     av_img->pixel_buffer = new_pixel_buffer;
-    img->data = new_pixel_buffer->data();
+
+    // The zero copy encode path reads the CVPixelBufferRef itself, so taking the CPU base address
+    // here would lock the IOSurface on every captured frame for nothing.
+    img->data = requires_cpu_copy(new_pixel_buffer->buf) ? new_pixel_buffer->data() : nullptr;
 
     fill_img_geometry(img, new_pixel_buffer->buf);
 
@@ -216,7 +219,7 @@ namespace platf {
         auto new_pixel = std::make_shared<av_pixel_buf_t>(new_sample->buf);
         av_img->sample_buffer = new_sample;
         av_img->pixel_buffer = new_pixel;
-        img->data = new_pixel->data();
+        img->data = requires_cpu_copy(new_pixel->buf) ? new_pixel->data() : nullptr;
         CFRelease(sampleBuffer);
       }
 
@@ -402,7 +405,7 @@ namespace platf {
         auto new_pixel = std::make_shared<av_pixel_buf_t>(new_sample->buf);
         av_img->sample_buffer = new_sample;
         av_img->pixel_buffer = new_pixel;
-        img->data = new_pixel->data();
+        img->data = requires_cpu_copy(new_pixel->buf) ? new_pixel->data() : nullptr;
         CFRelease(sampleBuffer);
       }
 

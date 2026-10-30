@@ -37,6 +37,35 @@ TEST(MacosImgGeometry, PlanarRowPitchComesFromLumaPlane) {
 }
 
 /**
+ * @brief Only formats that cannot go through VideoToolbox need a CPU base address.
+ */
+TEST(MacosImgGeometry, RequiresCpuCopyPerFormat) {
+  // An empty kCVPixelBufferIOSurfacePropertiesKey value asks for an IOSurface-backed buffer,
+  // which is what ScreenCaptureKit delivers.
+  auto *empty = CFDictionaryCreate(kCFAllocatorDefault, nullptr, nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+  const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
+  const void *values[] = {empty};
+  auto *iosurface = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+
+  for (const auto format : {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange, kCVPixelFormatType_420YpCbCr10BiPlanarFullRange}) {
+    CVPixelBufferRef pixels = nullptr;
+    ASSERT_EQ(CVPixelBufferCreate(kCFAllocatorDefault, 64, 32, format, iosurface, &pixels), kCVReturnSuccess);
+    EXPECT_FALSE(platf::requires_cpu_copy(pixels)) << "zero copy format " << (int) format;
+    CVPixelBufferRelease(pixels);
+  }
+
+  for (const auto format : {kCVPixelFormatType_32BGRA, kCVPixelFormatType_24RGB}) {
+    CVPixelBufferRef pixels = nullptr;
+    ASSERT_EQ(CVPixelBufferCreate(kCFAllocatorDefault, 64, 32, format, iosurface, &pixels), kCVReturnSuccess);
+    EXPECT_TRUE(platf::requires_cpu_copy(pixels)) << "software format " << (int) format;
+    CVPixelBufferRelease(pixels);
+  }
+
+  CFRelease(iosurface);
+  CFRelease(empty);
+}
+
+/**
  * @brief A packed BGRA buffer keeps the geometry the software encode path expects.
  */
 TEST(MacosImgGeometry, PackedGeometry) {
