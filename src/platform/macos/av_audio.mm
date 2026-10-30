@@ -744,6 +744,55 @@ namespace platf {
     } else {
       BOOST_LOG(debug) << "Set aggregate device buffer size to "sv << frameSize << " frames"sv;
     }
+
+    // Read back what the device actually granted. CoreAudio clamps a 240 frame request to the
+    // device's supported range, and the granted value is the IOProc cadence that every Sunshine
+    // audio frame inherits, so it is logged at info level to make the resulting latency visible.
+    {
+      AudioValueRange frameSizeRange {};
+      UInt32 rangeSize = sizeof(frameSizeRange);
+      AudioObjectPropertyAddress rangeAddr = {
+        .mSelector = kAudioDevicePropertyBufferFrameSizeRange,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+      };
+      if (AudioObjectGetPropertyData(self->aggregateDeviceID, &rangeAddr, 0, NULL, &rangeSize, &frameSizeRange) == noErr) {
+        BOOST_LOG(info) << "Audio: aggregate device buffer frame size range: "sv << (UInt32) frameSizeRange.mMinimum << "-"sv << (UInt32) frameSizeRange.mMaximum << " frames"sv;
+      }
+
+      UInt32 grantedFrameSize = 0;
+      UInt32 grantedSize = sizeof(grantedFrameSize);
+      if (AudioObjectGetPropertyData(self->aggregateDeviceID, &bufferSizeAddr, 0, NULL, &grantedSize, &grantedFrameSize) == noErr) {
+        const auto requestedRate = sampleRate > 0 ? (double) sampleRate : 1.0;
+        BOOST_LOG(info) << "Audio: aggregate device granted buffer size: "sv << grantedFrameSize << " frames ("sv << ((double) grantedFrameSize * 1000.0) / requestedRate << "ms per IOProc; requested "sv << frameSize << " frames)"sv;
+
+        if (grantedFrameSize > frameSize) {
+          BOOST_LOG(warning) << "Audio: the IOProc cadence is coarser than the requested audio frame, so capture reads wait for a device callback"sv;
+        }
+      }
+
+      AudioObjectPropertyAddress latencyAddr = {
+        .mSelector = kAudioDevicePropertyLatency,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+      };
+      UInt32 deviceLatencyFrames = 0;
+      UInt32 latencySize = sizeof(deviceLatencyFrames);
+      if (AudioObjectGetPropertyData(self->aggregateDeviceID, &latencyAddr, 0, NULL, &latencySize, &deviceLatencyFrames) == noErr) {
+        BOOST_LOG(info) << "Audio: aggregate device latency: "sv << deviceLatencyFrames << " frames"sv;
+      }
+
+      AudioObjectPropertyAddress safetyAddr = {
+        .mSelector = kAudioDevicePropertySafetyOffset,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+      };
+      UInt32 safetyOffsetFrames = 0;
+      UInt32 safetySize = sizeof(safetyOffsetFrames);
+      if (AudioObjectGetPropertyData(self->aggregateDeviceID, &safetyAddr, 0, NULL, &safetySize, &safetyOffsetFrames) == noErr) {
+        BOOST_LOG(info) << "Audio: aggregate device safety offset: "sv << safetyOffsetFrames << " frames"sv;
+      }
+    }
   }
 
   BOOST_LOG(debug) << "Aggregate device created and configured successfully"sv;
@@ -810,6 +859,7 @@ namespace platf {
 
   // Create AudioConverter based on actual device properties vs client requirements
   BOOL needsConversion = (aggregateDeviceSampleRate != clientSampleRate) || (aggregateDeviceChannels != clientChannels);
+  BOOST_LOG(info) << "Audio: format conversion "sv << (needsConversion ? "required"sv : "not required"sv) << " (device "sv << aggregateDeviceSampleRate << "Hz/"sv << aggregateDeviceChannels << "ch -> client "sv << clientSampleRate << "Hz/"sv << (int) clientChannels << "ch)"sv;
   BOOST_LOG(debug) << "needsConversion: "sv << (needsConversion ? "YES" : "NO")
                    << " (device: "sv << aggregateDeviceSampleRate << "Hz/" << aggregateDeviceChannels << "ch"
                    << " -> client: "sv << clientSampleRate << "Hz/" << (int) clientChannels << "ch)"sv;
