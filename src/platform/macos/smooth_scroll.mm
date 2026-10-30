@@ -6,8 +6,10 @@
 #include "src/platform/macos/smooth_scroll.h"
 
 #include <ApplicationServices/ApplicationServices.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <mutex>
@@ -186,9 +188,18 @@ namespace platf::macos {
       while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
         report_scroll_diagnostics(std::chrono::steady_clock::now());
         std::unique_lock<std::mutex> lock(scroll_mutex);
-        scroll_cv.wait_for(lock, RELEASE_THRESHOLD, [&] {
-          return scroll_thread_stop.load(std::memory_order_relaxed) || scroll_in_progress;
-        });
+        if (!scroll_in_progress) {
+          scroll_cv.wait_for(lock, RELEASE_THRESHOLD, [&] {
+            return scroll_thread_stop.load(std::memory_order_relaxed) || scroll_in_progress;
+          });
+        } else {
+          const auto release_deadline = last_input_time + RELEASE_THRESHOLD;
+          if (std::chrono::steady_clock::now() < release_deadline) {
+            scroll_cv.wait_until(lock, release_deadline, [&] {
+              return scroll_thread_stop.load(std::memory_order_relaxed);
+            });
+          }
+        }
         if (scroll_thread_stop.load(std::memory_order_relaxed)) {
           break;
         }
@@ -248,12 +259,15 @@ namespace platf::macos {
     void post_pixel_scroll(int32_t delta_y, int32_t delta_x) {
       std::unique_lock<std::mutex> lock(scroll_mutex);
       const auto now = std::chrono::steady_clock::now();
-      const auto sample_dt = std::chrono::duration<double>(now - last_input_time).count();
+      const bool has_previous_input = last_input_time.time_since_epoch().count() != 0;
+      const auto sample_dt = has_previous_input
+        ? std::chrono::duration<double>(now - last_input_time).count()
+        : 0.0;
       const bool had_scroll = scroll_in_progress;
 
       if (scroll_diagnostics_enabled) {
         scroll_diagnostics.input_events.fetch_add(1, std::memory_order_relaxed);
-        if (last_input_time.time_since_epoch().count() != 0 && sample_dt > 0.0) {
+        if (has_previous_input && sample_dt > 0.0) {
           const auto interval_us = static_cast<uint64_t>(sample_dt * 1'000'000.0);
           scroll_diagnostics.interval_samples.fetch_add(1, std::memory_order_relaxed);
           scroll_diagnostics.interval_total_us.fetch_add(interval_us, std::memory_order_relaxed);
@@ -265,19 +279,12 @@ namespace platf::macos {
       }
 
       // Keep idle time between independent gestures out of output-jitter metrics.
-      if (last_input_time.time_since_epoch().count() == 0 || sample_dt > 0.1) {
+      if (!has_previous_input || sample_dt > 0.1) {
         std::lock_guard<std::mutex> event_lock(event_mutex);
         last_output_time = {};
       }
-      if (!had_scroll) {
-        scroll_velocity_y = 0.0;
-        scroll_velocity_x = 0.0;
-      }
-      if (sample_dt > 0.0) {
-        constexpr double ALPHA = 0.7;
-        scroll_velocity_y = (scroll_velocity_y * (1.0 - ALPHA)) + (delta_y / sample_dt * ALPHA);
-        scroll_velocity_x = (scroll_velocity_x * (1.0 - ALPHA)) + (delta_x / sample_dt * ALPHA);
-      }
+      scroll_velocity_y = update_scroll_velocity(scroll_velocity_y, delta_y, sample_dt, had_scroll);
+      scroll_velocity_x = update_scroll_velocity(scroll_velocity_x, delta_x, sample_dt, had_scroll);
       const auto velocity_y = scroll_velocity_y;
       const auto velocity_x = scroll_velocity_x;
       scroll_in_progress = true;
@@ -293,8 +300,48 @@ namespace platf::macos {
                         << " mode=host_inertia";
       }
       post_event(static_cast<CGScrollPhase>(0), static_cast<CGMomentumScrollPhase>(0), delta_y, delta_x);
-      scroll_cv.notify_one();
+      if (!had_scroll) {
+        scroll_cv.notify_one();
+      }
     }
+  }
+
+  double update_scroll_velocity(
+    double current_velocity,
+    int32_t delta_pixels,
+    double sample_dt,
+    bool had_scroll
+  ) {
+    constexpr double MIN_SAMPLE_DT = 0.008;  // 8ms floor prevents burst packets from inflating velocity.
+    constexpr double NOMINAL_FIRST_SAMPLE_DT = 0.016;  // Conservative 60Hz baseline for the first sample.
+    constexpr double MAX_GESTURE_GAP_DT = 0.08;  // Reset stale momentum after >80ms idle gap.
+    constexpr double FIRST_SAMPLE_WEIGHT = 0.35;
+    constexpr double ALPHA = 0.55;
+    constexpr double MAX_VELOCITY = 2800.0;
+
+    const bool fresh_gesture = !had_scroll || sample_dt <= 0.0 || sample_dt > MAX_GESTURE_GAP_DT;
+    if (delta_pixels == 0) {
+      return fresh_gesture ? 0.0 : current_velocity;
+    }
+
+    if (fresh_gesture) {
+      const double initial_velocity = (static_cast<double>(delta_pixels) / NOMINAL_FIRST_SAMPLE_DT) * FIRST_SAMPLE_WEIGHT;
+      return std::clamp(initial_velocity, -MAX_VELOCITY, MAX_VELOCITY);
+    }
+
+    // Immediately cancel opposing momentum when the user reverses scroll direction.
+    if ((current_velocity > 0.0 && delta_pixels < 0) || (current_velocity < 0.0 && delta_pixels > 0)) {
+      current_velocity = 0.0;
+    }
+
+    const double effective_dt = std::max(sample_dt, MIN_SAMPLE_DT);
+    const double instant_velocity = static_cast<double>(delta_pixels) / effective_dt;
+    // Scale down the blend factor for sub-frame packet bursts so coalesced network packets
+    // cannot ratchet velocity up to the ceiling in a single millisecond.
+    const double burst_scale = std::min(1.0, sample_dt / MIN_SAMPLE_DT);
+    const double weight = ALPHA * burst_scale;
+    const double blended = (current_velocity * (1.0 - weight)) + (instant_velocity * weight);
+    return std::clamp(blended, -MAX_VELOCITY, MAX_VELOCITY);
   }
 
   void init_smooth_scroll() {
@@ -345,7 +392,13 @@ namespace platf::macos {
     int32_t delta_int;
     {
       std::lock_guard<std::mutex> lock(scroll_mutex);
+      if (!scroll_in_progress) {
+        pixel_remainder_y = 0.0;
+      }
       delta_int = to_pixel_delta(high_res_distance, pixel_remainder_y);
+    }
+    if (delta_int == 0) {
+      return;
     }
     post_pixel_scroll(delta_int, 0);
   }
@@ -354,7 +407,13 @@ namespace platf::macos {
     int32_t delta_int;
     {
       std::lock_guard<std::mutex> lock(scroll_mutex);
+      if (!scroll_in_progress) {
+        pixel_remainder_x = 0.0;
+      }
       delta_int = to_pixel_delta(high_res_distance, pixel_remainder_x);
+    }
+    if (delta_int == 0) {
+      return;
     }
     post_pixel_scroll(0, delta_int);
   }
