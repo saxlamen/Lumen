@@ -538,6 +538,8 @@ namespace video {
 
     // inject sps/vps data into idr pictures
     int inject;  ///< Number of upcoming IDR frames that should receive rewritten parameter sets.
+
+    detail::in_flight_frame_tracker_t frame_tracker;  ///< Submitted frames whose packets have not been drained yet.
   };
 
   /**
@@ -1853,6 +1855,11 @@ namespace video {
       return -1;
     }
 
+    // VideoToolbox and similar encoders keep several frames in flight, so the packet drained below
+    // belongs to an earlier submission. Remember what was submitted so packet metadata can be
+    // attributed to the frame that actually produced it.
+    session.frame_tracker.record_submitted_frame(frame_nr, frame_timestamp, (frame->flags & AV_FRAME_FLAG_KEY) != 0);
+
     while (ret >= 0) {
       auto packet = std::make_unique<packet_raw_avcodec>();
       auto av_packet = packet.get()->av_packet;
@@ -1864,11 +1871,22 @@ namespace video {
         return ret;
       }
 
+      // Resolve the submission that produced this packet. Without this lookup the frame index of
+      // the current call would be attributed to a packet that is still inside the encoder.
+      auto submitted = session.frame_tracker.resolve_packet(av_packet->pts, frame_nr);
+      auto submitted_frame_nr = submitted ? submitted->pts : frame_nr;
+      auto idr_requested = submitted ? submitted->idr_requested : ((frame->flags & AV_FRAME_FLAG_KEY) != 0);
+
+      // How far behind the current submission the encoder is, in frames. A stable nonzero value is
+      // the encoder's pipeline depth.
+      static logging::min_max_avg_periodic_logger<double> encoder_pipeline_logger {debug, "Video: encoder output latency"sv, " frames"sv};
+      encoder_pipeline_logger.collect_and_log((double) (frame_nr - submitted_frame_nr));
+
       if (av_packet->flags & AV_PKT_FLAG_KEY) {
-        BOOST_LOG(debug) << "Frame "sv << frame_nr << ": IDR Keyframe (AV_FRAME_FLAG_KEY)"sv;
+        BOOST_LOG(debug) << "Frame "sv << submitted_frame_nr << ": IDR Keyframe (AV_FRAME_FLAG_KEY)"sv;
       }
 
-      if ((frame->flags & AV_FRAME_FLAG_KEY) && !(av_packet->flags & AV_PKT_FLAG_KEY)) {
+      if (idr_requested && !(av_packet->flags & AV_PKT_FLAG_KEY)) {
         BOOST_LOG(error) << "Encoder did not produce IDR frame when requested!"sv;
       }
 
@@ -1897,7 +1915,11 @@ namespace video {
         );
       }
 
-      if (av_packet && av_packet->pts == frame_nr) {
+      if (submitted) {
+        packet->frame_timestamp = submitted->frame_timestamp;
+      } else if (av_packet->pts == AV_NOPTS_VALUE || av_packet->pts == frame_nr) {
+        // Encoders that strip the PTS, or frames that fell out of the tracker ring, still get the
+        // timestamp of the submission that is known to belong to this call.
         packet->frame_timestamp = frame_timestamp;
       }
 

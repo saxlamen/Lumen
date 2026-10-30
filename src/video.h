@@ -5,7 +5,9 @@
 #pragma once
 
 // standard includes
+#include <array>
 #include <chrono>
+#include <optional>
 #include <string_view>
 
 // local includes
@@ -796,5 +798,124 @@ namespace video {
      * @param capture_time Timestamp to attach when the backend did not supply one.
      */
     void stamp_frame_timestamp(const std::shared_ptr<platf::img_t> &img, bool frame_captured, std::chrono::steady_clock::time_point capture_time);
+
+    /**
+     * @brief Per-frame metadata for frames that are still inside an asynchronous encoder.
+     *
+     * Encoders such as VideoToolbox hold several frames in flight, so the packet returned by
+     * avcodec_receive_packet() belongs to a frame submitted earlier, not to the frame that was just
+     * handed over. Capture timestamps and IDR requests therefore have to be resolved against the
+     * packet's own PTS, otherwise the metadata of one frame is attributed to another.
+     *
+     * A single encoder thread submits and drains frames, so this tracker is not synchronized.
+     */
+    struct in_flight_frame_tracker_t {
+      /**
+       * @brief Number of ring slots. Must be a power of two and larger than the encoder depth.
+       */
+      static constexpr size_t kSlots = 32;
+
+      /**
+       * @brief Metadata recorded for one submitted frame.
+       */
+      struct slot_t {
+        int64_t pts = AV_NOPTS_VALUE;  ///< Frame PTS handed to avcodec_send_frame(), i.e. the pipeline frame index.
+        std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp of the submitted frame, if any.
+        bool idr_requested = false;  ///< True when AV_FRAME_FLAG_KEY was set on the submitted frame.
+      };
+
+      /**
+       * @brief Record the metadata of a frame that was successfully submitted to the encoder.
+       *
+       * @param pts Frame PTS handed to avcodec_send_frame().
+       * @param frame_timestamp Capture timestamp associated with the submitted frame.
+       * @param idr_requested True when AV_FRAME_FLAG_KEY was set on the submitted frame.
+       */
+      void record_submitted_frame(int64_t pts, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, bool idr_requested) {
+        if (pts < 0) {
+          return;
+        }
+
+        auto &slot = slots[static_cast<size_t>(pts) & (kSlots - 1)];
+        slot.pts = pts;
+        slot.frame_timestamp = frame_timestamp;
+        slot.idr_requested = idr_requested;
+        ++submissions;
+      }
+
+      /**
+       * @brief Look up the metadata that belongs to an encoded packet.
+       *
+       * The slot is consumed on a hit so a packet can never be attributed twice. Encoders that drop
+       * the PTS fall back to the frame index of the current call.
+       *
+       * @param packet_pts AVPacket::pts of the received packet.
+       * @param fallback_pts Frame index used when the packet carries no PTS.
+       * @return The recorded metadata, or std::nullopt when the frame is unknown or already consumed.
+       */
+      std::optional<slot_t> resolve_packet(int64_t packet_pts, int64_t fallback_pts) {
+        auto lookup_pts = packet_pts == AV_NOPTS_VALUE ? fallback_pts : packet_pts;
+        if (lookup_pts < 0) {
+          return std::nullopt;
+        }
+
+        auto &slot = slots[static_cast<size_t>(lookup_pts) & (kSlots - 1)];
+        if (slot.pts != lookup_pts) {
+          ++misses;
+          return std::nullopt;
+        }
+
+        auto matched = slot;
+        slot.pts = AV_NOPTS_VALUE;
+        slot.frame_timestamp.reset();
+        slot.idr_requested = false;
+        ++matches;
+        return matched;
+      }
+
+      /**
+       * @brief Discard all recorded frames, for example after an encoder reconfiguration.
+       */
+      void clear() {
+        for (auto &slot : slots) {
+          slot = {};
+        }
+      }
+
+      /**
+       * @brief Return the number of recorded frames.
+       *
+       * @return Total submissions accepted by the tracker.
+       */
+      uint64_t submission_count() const {
+        return submissions;
+      }
+
+      /**
+       * @brief Return the number of packets that resolved to a recorded frame.
+       *
+       * @return Total successful lookups.
+       */
+      uint64_t match_count() const {
+        return matches;
+      }
+
+      /**
+       * @brief Return the number of packets that could not be resolved.
+       *
+       * A rising count means the encoder holds more frames in flight than the ring can track.
+       *
+       * @return Total failed lookups.
+       */
+      uint64_t miss_count() const {
+        return misses;
+      }
+
+      std::array<slot_t, kSlots> slots {};  ///< Ring of recorded frames, indexed by PTS.
+
+      uint64_t submissions = 0;  ///< Number of recorded submissions.
+      uint64_t matches = 0;  ///< Number of resolved packets.
+      uint64_t misses = 0;  ///< Number of packets that did not resolve.
+    };
   }  // namespace detail
 }  // namespace video

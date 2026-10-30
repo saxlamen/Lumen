@@ -454,3 +454,114 @@ TEST(FrameTimestampTest, IgnoresCallbacksWithoutFrame) {
 TEST(FrameTimestampTest, ToleratesMissingImage) {
   video::detail::stamp_frame_timestamp(nullptr, true, std::chrono::steady_clock::now());
 }
+
+/**
+ * @brief A packet that comes out immediately resolves to the frame just submitted.
+ */
+TEST(InFlightTrackerTest, SynchronousMatch) {
+  video::detail::in_flight_frame_tracker_t tracker;
+  const auto capture_time = std::chrono::steady_clock::time_point {std::chrono::milliseconds {1000}};
+
+  tracker.record_submitted_frame(5, capture_time, true);
+  auto matched = tracker.resolve_packet(5, 5);
+
+  ASSERT_TRUE(matched.has_value());
+  EXPECT_EQ(matched->pts, 5);
+  ASSERT_TRUE(matched->frame_timestamp.has_value());
+  EXPECT_EQ(*matched->frame_timestamp, capture_time);
+  EXPECT_TRUE(matched->idr_requested);
+  EXPECT_EQ(tracker.match_count(), 1U);
+
+  // A packet can never be attributed twice.
+  EXPECT_FALSE(tracker.resolve_packet(5, 5).has_value());
+  EXPECT_EQ(tracker.miss_count(), 1U);
+}
+
+/**
+ * @brief A packet that lags the submission by several frames still gets its own capture timestamp.
+ *
+ * The frames submitted after the captured one are re-encodes of the previous image and therefore
+ * carry no timestamp at all, which is what makes the ring lookup necessary.
+ */
+TEST(InFlightTrackerTest, PipelineOffsetWithTimeoutReencodes) {
+  video::detail::in_flight_frame_tracker_t tracker;
+  const auto capture_time = std::chrono::steady_clock::time_point {std::chrono::milliseconds {2000}};
+
+  tracker.record_submitted_frame(100, capture_time, false);
+  for (auto frame_nr : {101, 102, 103, 104}) {
+    tracker.record_submitted_frame(frame_nr, std::nullopt, frame_nr == 104);
+  }
+
+  auto matched = tracker.resolve_packet(100, 104);
+  ASSERT_TRUE(matched.has_value());
+  EXPECT_EQ(matched->pts, 100);
+  ASSERT_TRUE(matched->frame_timestamp.has_value());
+  EXPECT_EQ(*matched->frame_timestamp, capture_time);
+  EXPECT_FALSE(matched->idr_requested);
+
+  auto idr_packet = tracker.resolve_packet(104, 104);
+  ASSERT_TRUE(idr_packet.has_value());
+  EXPECT_TRUE(idr_packet->idr_requested);
+  EXPECT_FALSE(idr_packet->frame_timestamp.has_value());
+}
+
+/**
+ * @brief An encoder that strips the packet PTS falls back to the current frame index.
+ */
+TEST(InFlightTrackerTest, MissingPtsFallsBackToCurrentFrame) {
+  video::detail::in_flight_frame_tracker_t tracker;
+  const auto capture_time = std::chrono::steady_clock::time_point {std::chrono::milliseconds {3000}};
+
+  tracker.record_submitted_frame(7, capture_time, false);
+  auto matched = tracker.resolve_packet(AV_NOPTS_VALUE, 7);
+
+  ASSERT_TRUE(matched.has_value());
+  EXPECT_EQ(matched->pts, 7);
+  EXPECT_EQ(*matched->frame_timestamp, capture_time);
+}
+
+/**
+ * @brief Packets from unknown or evicted frames are reported as misses instead of guessing.
+ */
+TEST(InFlightTrackerTest, UnknownAndEvictedFramesMiss) {
+  video::detail::in_flight_frame_tracker_t tracker;
+  const auto capture_time = std::chrono::steady_clock::time_point {std::chrono::milliseconds {4000}};
+
+  EXPECT_FALSE(tracker.resolve_packet(1000, 1000).has_value());
+
+  // A slot that is overwritten before it is drained loses the older frame that shared the slot.
+  constexpr auto kSlots = (int64_t) video::detail::in_flight_frame_tracker_t::kSlots;
+  tracker.record_submitted_frame(0, capture_time, false);
+  for (int64_t frame_nr = 1; frame_nr <= kSlots; ++frame_nr) {
+    tracker.record_submitted_frame(frame_nr, capture_time, false);
+  }
+
+  EXPECT_FALSE(tracker.resolve_packet(0, 0).has_value());
+  EXPECT_TRUE(tracker.resolve_packet(kSlots, kSlots).has_value());
+  EXPECT_TRUE(tracker.resolve_packet(1, 1).has_value());
+}
+
+/**
+ * @brief Clearing the tracker forgets frames that were submitted before a reconfiguration.
+ */
+TEST(InFlightTrackerTest, ClearDiscardsRecordedFrames) {
+  video::detail::in_flight_frame_tracker_t tracker;
+
+  tracker.record_submitted_frame(9, std::chrono::steady_clock::now(), true);
+  tracker.clear();
+
+  EXPECT_FALSE(tracker.resolve_packet(9, 9).has_value());
+  EXPECT_EQ(tracker.submission_count(), 1U);
+}
+
+/**
+ * @brief A negative frame index is never recorded or resolved.
+ */
+TEST(InFlightTrackerTest, RejectsNegativePts) {
+  video::detail::in_flight_frame_tracker_t tracker;
+
+  tracker.record_submitted_frame(-1, std::chrono::steady_clock::now(), false);
+
+  EXPECT_EQ(tracker.submission_count(), 0U);
+  EXPECT_FALSE(tracker.resolve_packet(-1, -1).has_value());
+}
