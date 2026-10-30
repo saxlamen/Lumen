@@ -34,7 +34,6 @@ typedef void (^AudioSampleCallbackBlock)(CMSampleBufferRef);
 @property (nonatomic, copy) AudioSampleCallbackBlock audioCallback;
 @property (nonatomic, strong) dispatch_semaphore_t captureSignal;
 @property (nonatomic, assign) BOOL stopping;
-@property (nonatomic, assign) CMSampleBufferRef lastValidSampleBuffer;
 
 + (NSArray<NSDictionary *> *)displayNames;
 + (NSString *)getDisplayName:(CGDirectDisplayID)displayID;
@@ -45,6 +44,9 @@ typedef void (^AudioSampleCallbackBlock)(CMSampleBufferRef);
                    captureAudio:(BOOL)captureAudio;
 
 - (void)setFrameWidth:(int)frameWidth frameHeight:(int)frameHeight;
+
+/// Number of ScreenCaptureKit deliveries that carried no image and were not forwarded downstream.
+- (NSUInteger)idleSampleBuffersSkipped;
 - (dispatch_semaphore_t)captureVideo:(VideoFrameCallbackBlock)videoCallback
                          audioCallback:(AudioSampleCallbackBlock)audioCallback;
 - (void)stopCapture;

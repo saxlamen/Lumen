@@ -11,9 +11,12 @@
 
 API_AVAILABLE(macos(12.3))
 @implementation SCCapture {
-  /// Guards the scalar capture settings and the cached frame/callbacks, which are written from
+  /// Guards the scalar capture settings and the cached callbacks, which are written from
   /// the capture and encoder threads and read on the ScreenCaptureKit sample queues.
   os_unfair_lock _stateLock;
+
+  /// ScreenCaptureKit deliveries that carried no image content and were not forwarded downstream.
+  NSUInteger _idleSampleBuffersSkipped;
 }
 
 + (BOOL)isAvailable {
@@ -143,6 +146,13 @@ API_AVAILABLE(macos(12.3))
     _frameWidth = frameWidth;
     _frameHeight = frameHeight;
     os_unfair_lock_unlock(&_stateLock);
+}
+
+- (NSUInteger)idleSampleBuffersSkipped {
+    os_unfair_lock_lock(&_stateLock);
+    NSUInteger skipped = _idleSampleBuffersSkipped;
+    os_unfair_lock_unlock(&_stateLock);
+    return skipped;
 }
 
 - (SCDisplay *)findDisplayWithID:(CGDirectDisplayID)displayID {
@@ -328,11 +338,6 @@ API_AVAILABLE(macos(12.3))
 
         self.videoCallback = nil;
         self.audioCallback = nil;
-
-        if (self.lastValidSampleBuffer) {
-            CFRelease(self.lastValidSampleBuffer);
-            self.lastValidSampleBuffer = NULL;
-        }
     }
 }
 
@@ -383,25 +388,26 @@ API_AVAILABLE(macos(12.3))
 
     if (type == SCStreamOutputTypeScreen) {
         CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+        if (!pixelBuffer) {
+            // ScreenCaptureKit emits status deliveries with no image content while the display is
+            // idle. video::captureThread() already maintains the minimum frame rate by re-encoding
+            // the previous frame, so forwarding the last valid sample here only pushed the same
+            // IOSurface through the capture pool a second time.
+            os_unfair_lock_lock(&_stateLock);
+            ++_idleSampleBuffersSkipped;
+            os_unfair_lock_unlock(&_stateLock);
+            return;
+        }
 
-        // Take our own references to the callback and the sample buffer under the lock, then
-        // deliver outside of it: stopCapture can be called from another thread at any point, and
-        // it releases both the callback and the cached sample buffer.
+        // Take our own reference to the callback under the lock, then deliver outside of it:
+        // stopCapture can be called from another thread at any point and releases the callback.
         VideoFrameCallbackBlock callback = nil;
         CMSampleBufferRef delivered = NULL;
 
         @synchronized(self) {
-            if (pixelBuffer) {
-                if (self.lastValidSampleBuffer) {
-                    CFRelease(self.lastValidSampleBuffer);
-                }
-                self.lastValidSampleBuffer = (CMSampleBufferRef) CFRetain(sampleBuffer);
-            }
-
-            CMSampleBufferRef cached = pixelBuffer ? sampleBuffer : self.lastValidSampleBuffer;
-            if (cached && !self.stopping && self.videoCallback) {
+            if (!self.stopping && self.videoCallback) {
                 callback = Block_copy(self.videoCallback);
-                delivered = (CMSampleBufferRef) CFRetain(cached);
+                delivered = (CMSampleBufferRef) CFRetain(sampleBuffer);
             }
         }
 

@@ -250,8 +250,13 @@ namespace platf {
   // ── ScreenCaptureKit capture backend (macOS 12.3+) ──────────────────
 
   struct sc_display_t: public display_t {
-    SCCapture *sc_capture {};
-    CGDirectDisplayID display_id {};
+    SCCapture *sc_capture {};  ///< ScreenCaptureKit capture object driving this display backend.
+    CGDirectDisplayID display_id {};  ///< Output display being captured.
+
+    /**
+     * @brief Spacing between reports of skipped idle ScreenCaptureKit deliveries.
+     */
+    static constexpr std::chrono::seconds idle_report_interval {20};
 
     ~sc_display_t() override {
       [sc_capture stopCapture];
@@ -293,11 +298,25 @@ namespace platf {
 
       // Poll with timeout instead of waiting forever, so the capture thread
       // can respond to session shutdown or cursor toggle without reconnecting.
+      std::uint64_t reported_idle_skips {};
+      auto next_idle_report = std::chrono::steady_clock::now() + idle_report_interval;
+
       while (dispatch_semaphore_wait(signal, dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC)) != 0) {
         // If cursor toggle occurred, stop capture cleanly so video loop reinitializes with new setting
         if (sc_capture.showsCursor != *cursor) {
           [sc_capture stopCapture];
           return capture_e::reinit;
+        }
+
+        // Report how many status deliveries were skipped, so the effect of not re-delivering the
+        // cached frame is visible in the log instead of inferred from the client's frame rate.
+        if (auto now = std::chrono::steady_clock::now(); now >= next_idle_report) {
+          next_idle_report = now + idle_report_interval;
+          const auto skipped = (std::uint64_t) [sc_capture idleSampleBuffersSkipped];
+          if (skipped != reported_idle_skips) {
+            BOOST_LOG(debug) << "Video: skipped "sv << (skipped - reported_idle_skips) << " idle sample buffers, "sv << skipped << " total"sv;
+            reported_idle_skips = skipped;
+          }
         }
 
         // Check if the session is ending - a detached guard or a stopped capture context makes
