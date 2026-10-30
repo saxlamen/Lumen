@@ -37,6 +37,7 @@
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
+#include "lumen_version.h"
 #include "main.h"
 #include "nvhttp.h"
 #include "process.h"
@@ -265,7 +266,7 @@ int main(int argc, char *argv[]) {
   // logging can begin at this point
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
-  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " (Lumen " << LUMEN_VERSION << ") commit: " << PROJECT_VERSION_COMMIT;
 
   // Log publisher metadata
   log_publisher_data();

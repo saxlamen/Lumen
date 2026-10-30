@@ -45,6 +45,7 @@
 #include "httpcommon.h"
 #include "input.h"
 #include "logging.h"
+#include "lumen_version.h"
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
@@ -1424,6 +1425,7 @@ namespace confighttp {
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
     output_tree["version"] = PROJECT_VERSION;
+    output_tree["lumen_version"] = LUMEN_VERSION;
 
     auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
 

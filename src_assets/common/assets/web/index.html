@@ -52,7 +52,10 @@
     <!-- Version -->
     <div class="card my-4">
       <div class="card-body" v-if="version">
-        <h2>Version {{version.version}}</h2>
+        <h2 class="d-flex align-items-center gap-2 flex-wrap">
+          <span>Version {{version.version}}</span>
+          <span v-if="lumenVersion" class="badge bg-secondary fs-6 fw-normal">Lumen {{lumenVersion}}</span>
+        </h2>
 
         <div v-if="loading" class="my-3">
           {{ $t('index.loading_latest') }}
@@ -170,6 +173,7 @@
     data() {
       return {
         version: null,
+        lumenVersion: "",
         githubVersion: null,
         notifyPreReleases: false,
         preReleaseVersion: null,
@@ -190,6 +194,7 @@
         this.platform = config.platform;
         this.controllerEnabled = config.controller !== "disabled";
         this.gamepadDriver = config.gamepad_driver || '';
+        this.lumenVersion = config.lumen_version || '';
         this.version = new SunshineVersion(null, config.version);
         console.log("Version: ", this.version.version)
         this.githubVersion = new SunshineVersion(await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json()), null);

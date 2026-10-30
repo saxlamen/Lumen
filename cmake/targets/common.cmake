@@ -25,6 +25,7 @@ endif()
 
 target_link_libraries(lumen ${SUNSHINE_EXTERNAL_LIBRARIES} ${EXTRA_LIBS})
 target_compile_definitions(lumen PUBLIC ${SUNSHINE_DEFINITIONS})
+target_include_directories(lumen PRIVATE "${CMAKE_BINARY_DIR}")
 # Bundle output must match the executable and app names configured by macOS packaging.
 if(NOT APPLE OR SUNSHINE_BUILD_HOMEBREW)
     set_target_properties(lumen PROPERTIES OUTPUT_NAME "lumen")

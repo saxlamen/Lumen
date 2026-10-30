@@ -27,7 +27,7 @@ class SunshineVersion {
     if (v.indexOf("v") === 0) {
       v = v.substring(1);
     }
-    return v.split('.').map(Number);
+    return v.split('-')[0].split('.').map(Number);
   }
 
   isGreater(otherVersion) {

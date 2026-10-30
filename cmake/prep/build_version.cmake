@@ -33,9 +33,18 @@ else()
     if(GIT_EXECUTABLE)
         MESSAGE("${CMAKE_SOURCE_DIR}")
         get_filename_component(SRC_DIR "${CMAKE_SOURCE_DIR}" DIRECTORY)
+        # Gather latest upstream release tag reachable from HEAD (the rebased base version)
+        execute_process(
+                COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "v*"
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE GIT_DESCRIBE_TAG
+                RESULT_VARIABLE GIT_TAG_ERROR_CODE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
         #Get current Branch
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE GIT_DESCRIBE_BRANCH
                 RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -43,6 +52,7 @@ else()
         # Gather current commit
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 OUTPUT_VARIABLE GIT_DESCRIBE_VERSION
                 RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE
                 OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -50,18 +60,28 @@ else()
         # Check if Dirty
         execute_process(
                 COMMAND ${GIT_EXECUTABLE} diff --quiet --exit-code
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                 RESULT_VARIABLE GIT_IS_DIRTY
                 OUTPUT_STRIP_TRAILING_WHITESPACE
         )
+        if(NOT GIT_TAG_ERROR_CODE AND NOT GIT_DESCRIBE_TAG STREQUAL "")
+            string(REGEX REPLACE "^v" "" PROJECT_VERSION "${GIT_DESCRIBE_TAG}")
+            set(CMAKE_PROJECT_VERSION "${PROJECT_VERSION}")
+            set(SUNSHINE_REBASE_VERSION "${PROJECT_VERSION}" CACHE INTERNAL "Rebased upstream Sunshine version" FORCE)
+            MESSAGE("Rebased Sunshine Tag Version: ${PROJECT_VERSION}")
+        endif()
         if(NOT GIT_DESCRIBE_ERROR_CODE)
             MESSAGE("Sunshine Branch: ${GIT_DESCRIBE_BRANCH}")
-            if(NOT GIT_DESCRIBE_BRANCH STREQUAL "master")
-                set(PROJECT_VERSION ${PROJECT_VERSION}-${GIT_DESCRIBE_VERSION})
-                MESSAGE("Sunshine Version: ${GIT_DESCRIBE_VERSION}")
-            endif()
-            if(GIT_IS_DIRTY)
-                set(PROJECT_VERSION ${PROJECT_VERSION}-dirty)
-                MESSAGE("Git tree is dirty!")
+            set(GITHUB_COMMIT "${GIT_DESCRIBE_VERSION}")
+            if(GIT_TAG_ERROR_CODE OR GIT_DESCRIBE_TAG STREQUAL "")
+                if(NOT GIT_DESCRIBE_BRANCH STREQUAL "master")
+                    set(PROJECT_VERSION ${PROJECT_VERSION}-${GIT_DESCRIBE_VERSION})
+                    MESSAGE("Sunshine Version: ${GIT_DESCRIBE_VERSION}")
+                endif()
+                if(GIT_IS_DIRTY)
+                    set(PROJECT_VERSION ${PROJECT_VERSION}-dirty)
+                    MESSAGE("Git tree is dirty!")
+                endif()
             endif()
         else()
             MESSAGE(ERROR ": Got git error while fetching tags: ${GIT_DESCRIBE_ERROR_CODE}")
@@ -150,3 +170,22 @@ list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_COMMIT="${GITHUB_COMMIT}")
+
+# Generate lumen_version.h from LUMEN_VERSION file so bumping Lumen version
+# only recompiles files that include lumen_version.h.
+set(LUMEN_VERSION_FILE "${CMAKE_SOURCE_DIR}/LUMEN_VERSION")
+if(EXISTS "${LUMEN_VERSION_FILE}")
+    file(STRINGS "${LUMEN_VERSION_FILE}" LUMEN_VERSION_STR LIMIT_COUNT 1)
+    string(STRIP "${LUMEN_VERSION_STR}" LUMEN_VERSION_STR)
+else()
+    set(LUMEN_VERSION_STR "1.0.0")
+endif()
+file(WRITE "${CMAKE_BINARY_DIR}/lumen_version.h.tmp"
+"/**\n * @file lumen_version.h\n * @brief Generated Lumen version header.\n */\n#pragma once\n#define LUMEN_VERSION \"${LUMEN_VERSION_STR}\"\n")
+execute_process(
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_BINARY_DIR}/lumen_version.h.tmp"
+        "${CMAKE_BINARY_DIR}/lumen_version.h"
+)
+file(REMOVE "${CMAKE_BINARY_DIR}/lumen_version.h.tmp")
+message("LUMEN_VERSION: ${LUMEN_VERSION_STR}")

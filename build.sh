@@ -24,7 +24,23 @@ git submodule update --init -- \
 git -C third-party/moonlight-common-c submodule update --init -- enet nanors
 
 echo "==> Checking build directory: $BUILD_DIR"
-if [[ ! -f "$BUILD_DIR/CMakeCache.txt" || ! -f "$BUILD_DIR/Makefile" ]]; then
+REBASE_VERSION="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || echo '0.0.0')"
+LUMEN_VERSION_FILE="$REPO_DIR/LUMEN_VERSION"
+if [[ -f "$LUMEN_VERSION_FILE" ]]; then
+  CURRENT_LUMEN_VER="$(tr -d '[:space:]' < "$LUMEN_VERSION_FILE")"
+  if [[ "$CURRENT_LUMEN_VER" == "0.9.9" ]]; then
+    NEXT_LUMEN_VER="1.0.0"
+  elif [[ "$CURRENT_LUMEN_VER" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    NEXT_LUMEN_VER="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+  else
+    NEXT_LUMEN_VER="1.0.0"
+  fi
+else
+  NEXT_LUMEN_VER="1.0.0"
+fi
+echo "==> Lumen version: $NEXT_LUMEN_VER (base Sunshine: $REBASE_VERSION)"
+
+if [[ ! -f "$BUILD_DIR/CMakeCache.txt" || ! -f "$BUILD_DIR/Makefile" ]] || ! grep -q "^SUNSHINE_REBASE_VERSION:INTERNAL=${REBASE_VERSION}$" "$BUILD_DIR/CMakeCache.txt"; then
   cmake -S . -B "$BUILD_DIR" -G "Unix Makefiles" \
     -DCMAKE_CXX_STANDARD=23 \
     -DHOMEBREW_ALLOW_FETCHCONTENT=ON \
@@ -35,6 +51,23 @@ if [[ ! -f "$BUILD_DIR/CMakeCache.txt" || ! -f "$BUILD_DIR/Makefile" ]]; then
     -DBUILD_TESTS=OFF \
     -DBUILD_DOCS=OFF \
     -DBOOST_USE_STATIC=OFF
+fi
+
+cat > "$BUILD_DIR/lumen_version.h" <<EOF
+/**
+ * @file lumen_version.h
+ * @brief Generated Lumen version header.
+ */
+#pragma once
+#define LUMEN_VERSION "${NEXT_LUMEN_VER}"
+EOF
+
+if [[ ! -f "$BUILD_DIR/assets/web/index.html" ]] || [[ -n "$(find src_assets/common/assets/web -newer "$BUILD_DIR/assets/web/index.html" -print -quit 2>/dev/null)" ]]; then
+  echo "==> Building Web UI assets..."
+  if [[ ! -d "node_modules" || "package-lock.json" -nt "node_modules/.package-lock.json" ]]; then
+    npm ci --ignore-scripts
+  fi
+  SUNSHINE_SOURCE_ASSETS_DIR="$REPO_DIR/src_assets" SUNSHINE_ASSETS_DIR="$REPO_DIR/$BUILD_DIR" npm run build
 fi
 
 echo "==> Performing incremental compile..."
@@ -78,4 +111,5 @@ if ! brew services start lumen; then
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
   fi
 fi
-echo "==> Done."
+echo "$NEXT_LUMEN_VER" > "$LUMEN_VERSION_FILE"
+echo "==> Done (Lumen $NEXT_LUMEN_VER)."
