@@ -200,6 +200,7 @@ namespace input {
     gamepad_t():
         gamepad_state {},
         back_timeout_id {},
+        home_release_id {},
         id {-1},
         back_button_state {button_state_e::NONE} {
     }
@@ -219,6 +220,8 @@ namespace input {
     platf::gamepad_state_t gamepad_state;  ///< Gamepad state.
 
     thread_pool_util::ThreadPool::task_id_t back_timeout_id;  ///< Back timeout ID.
+
+    thread_pool_util::ThreadPool::task_id_t home_release_id;  ///< Pending delayed Home button release, scheduled by back_timeout_id.
 
     int id;  ///< Global gamepad slot assigned to this client controller.
 
@@ -373,6 +376,10 @@ namespace input {
       if (gamepad.back_timeout_id) {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
+      }
+      if (gamepad.home_release_id) {
+        task_pool.cancel(gamepad.home_release_id);
+        gamepad.home_release_id = nullptr;
       }
       if (gamepad.id >= 0) {
         ::input::free_gamepad(platf_input, gamepad.id);
@@ -1643,12 +1650,26 @@ namespace input {
             state.buttonFlags |= platf::HOME;
             platf::gamepad_update(platf_input, gamepad.id, state);
 
-            // Sleep for a short time to allow the input to be detected
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // Release the Home button on a second delayed task instead of sleeping here: this
+            // lambda runs on the single task pool worker, and a sleep would hold every queued
+            // keyboard and mouse event behind it for the whole hold period.
+            auto release_home = [input, controller]() {
+              auto &gamepad = input->gamepads[controller];
 
-            // Release Home button
-            state.buttonFlags &= ~platf::HOME;
-            platf::gamepad_update(platf_input, gamepad.id, state);
+              // The slot may already have been freed if the client disconnected while Home was held
+              if (gamepad.id < 0) {
+                gamepad.home_release_id = nullptr;
+                return;
+              }
+
+              auto &state = gamepad.gamepad_state;
+              state.buttonFlags &= ~platf::HOME;
+              platf::gamepad_update(platf_input, gamepad.id, state);
+
+              gamepad.home_release_id = nullptr;
+            };
+
+            gamepad.home_release_id = task_pool.pushDelayed(std::move(release_home), 100ms).task_id;
 
             gamepad.back_timeout_id = nullptr;
           };
@@ -2183,6 +2204,10 @@ namespace input {
       if (gamepad.back_timeout_id) {
         task_pool.cancel(gamepad.back_timeout_id);
         gamepad.back_timeout_id = nullptr;
+      }
+      if (gamepad.home_release_id) {
+        task_pool.cancel(gamepad.home_release_id);
+        gamepad.home_release_id = nullptr;
       }
       if (gamepad.id >= 0) {
         platf::gamepad_update(platf_input, gamepad.id, {});
