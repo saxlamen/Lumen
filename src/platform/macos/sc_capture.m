@@ -77,8 +77,10 @@ API_AVAILABLE(macos(12.3))
         }
 
         // Create dispatch queues for video and audio processing
+        // Capture delivery is latency critical: a frame that waits behind lower priority work in
+        // this queue shows up as end-to-end latency, so the queues match the audio capture thread.
         dispatch_queue_attr_t qos = dispatch_queue_attr_make_with_qos_class(
-            DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, DISPATCH_QUEUE_PRIORITY_HIGH);
+            DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, DISPATCH_QUEUE_PRIORITY_HIGH);
         self.videoQueue = dispatch_queue_create("dev.lizardbyte.sunshine.videoQueue", qos);
         self.audioQueue = dispatch_queue_create("dev.lizardbyte.sunshine.audioQueue", qos);
 

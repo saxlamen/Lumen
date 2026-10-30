@@ -57,6 +57,18 @@ namespace platf {
       return false;
     }
 
+    // Measurement point for the capture backend queue: how long a composed frame waited before
+    // this handler ran. This is the number the capture queue QoS class controls.
+    const auto sample_time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    if (CMTIME_IS_VALID(sample_time)) {
+      const auto host_time = CMClockGetTime(CMClockGetHostTimeClock());
+      const auto queued_ms = (CMTimeGetSeconds(host_time) - CMTimeGetSeconds(sample_time)) * 1000.0;
+      if (queued_ms >= 0.0) {
+        static logging::min_max_avg_periodic_logger<double> capture_queue_logger {debug, "Video: sample queue delivery", "ms"};
+        capture_queue_logger.collect_and_log(queued_ms);
+      }
+    }
+
     auto new_sample_buffer = std::make_shared<av_sample_buf_t>(sampleBuffer);
     auto new_pixel_buffer = std::make_shared<av_pixel_buf_t>(new_sample_buffer->buf);
 
