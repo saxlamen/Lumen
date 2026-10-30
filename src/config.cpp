@@ -794,6 +794,9 @@ namespace config {
       {}  // wa
     },  // display_device
 
+    "enabled"s,  // virtual_display
+    false,  // show_cursor
+
     0,  // max_bitrate
     0  // minimum_fps_target (0 = framerate)
   };
@@ -802,10 +805,10 @@ namespace config {
    * @brief Default audio configuration values used before file and CLI overrides.
    */
   audio_t audio {
-    {},  // audio_sink
-    {},  // virtual_sink
+    {},  // sink
+    {},  // virtual sink
     true,  // stream audio
-    true,  // install_steam_drivers
+    true,  // install steam drivers
   };
 
   /**
@@ -813,14 +816,11 @@ namespace config {
    */
   stream_t stream {
     10s,  // ping_timeout
-
-    APPS_JSON_PATH,
-
-    20,  // fecPercentage
-
-    ENCRYPTION_MODE_NEVER,  // lan_encryption_mode
-    ENCRYPTION_MODE_OPPORTUNISTIC,  // wan_encryption_mode
-    0,  // packetsize
+    "apps.json"s,  // file_apps
+    20,  // fec_percentage
+    ENCRYPTION_MODE_OPPORTUNISTIC,  // lan_encryption_mode
+    ENCRYPTION_MODE_MANDATORY,  // wan_encryption_mode
+    1024,  // packetsize
   };
 
   /**
@@ -866,6 +866,7 @@ namespace config {
     true,  // controller enabled
     true,  // always send scancodes
     true,  // high resolution scrolling
+    true,  // macos_smooth_scrolling
     true,  // native pen/touch support
   };
 
@@ -1698,6 +1699,8 @@ namespace config {
     string_f(vars, "encoder", video.encoder);
     string_f(vars, "adapter_name", video.adapter_name);
     string_f(vars, "output_name", video.output_name);
+    string_f(vars, "virtual_display", video.virtual_display);
+    bool_f(vars, "show_cursor", video.show_cursor);
 
     generic_f(vars, "dd_configuration_option", video.dd.configuration_option, dd::config_option_from_view);
     generic_f(vars, "dd_resolution_option", video.dd.resolution_option, dd::resolution_option_from_view);
@@ -1848,6 +1851,7 @@ namespace config {
     bool_f(vars, "always_send_scancodes", input.always_send_scancodes);
 
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
+    bool_f(vars, "macos_smooth_scrolling", input.macos_smooth_scrolling);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
 
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
@@ -2099,5 +2103,28 @@ namespace config {
 #endif
 
     return 0;
+  }
+
+  void save_show_cursor(bool show_cursor) {
+    auto &path = sunshine.config_file;
+    auto content = file_handler::read_file(path.c_str());
+
+    std::string search = "show_cursor = ";
+    auto pos = content.find(search);
+
+    std::string new_value = std::string(search) + (show_cursor ? "true" : "false");
+
+    if (pos != std::string::npos) {
+      auto line_end = content.find('\n', pos);
+      if (line_end == std::string::npos) line_end = content.size();
+      content.replace(pos, line_end - pos, new_value);
+    } else {
+      if (!content.empty() && content.back() != '\n') {
+        content += '\n';
+      }
+      content += new_value + '\n';
+    }
+
+    file_handler::write_file(path.c_str(), content);
   }
 }  // namespace config

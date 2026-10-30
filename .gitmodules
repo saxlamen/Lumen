@@ -1,7 +1,3 @@
-[submodule "packaging/linux/flatpak/deps/flatpak-builder-tools"]
-	path = packaging/linux/flatpak/deps/flatpak-builder-tools
-	url = https://github.com/flatpak/flatpak-builder-tools.git
-	branch = master
 [submodule "third-party/build-deps"]
 	path = third-party/build-deps
 	url = https://github.com/LizardByte/build-deps.git
@@ -29,14 +25,6 @@
 	path = third-party/moonlight-common-c
 	url = https://github.com/moonlight-stream/moonlight-common-c.git
 	branch = master
-[submodule "third-party/nvapi"]
-	path = third-party/nvapi
-	url = https://github.com/NVIDIA/nvapi.git
-	branch = main
-[submodule "third-party/plasma-wayland-protocols"]
-	path = third-party/plasma-wayland-protocols
-	url = https://github.com/KDE/plasma-wayland-protocols.git
-	branch = master
 [submodule "third-party/Simple-Web-Server"]
 	path = third-party/Simple-Web-Server
 	url = https://github.com/LizardByte-infrastructure/Simple-Web-Server.git
@@ -48,16 +36,4 @@
 [submodule "third-party/tray"]
 	path = third-party/tray
 	url = https://github.com/LizardByte/tray.git
-	branch = master
-[submodule "third-party/ViGEmClient"]
-	path = third-party/ViGEmClient
-	url = https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git
-	branch = master
-[submodule "third-party/wayland-protocols"]
-	path = third-party/wayland-protocols
-	url = https://github.com/LizardByte-infrastructure/wayland-protocols.git
-	branch = main
-[submodule "third-party/wlr-protocols"]
-	path = third-party/wlr-protocols
-	url = https://github.com/LizardByte-infrastructure/wlr-protocols.git
 	branch = master
