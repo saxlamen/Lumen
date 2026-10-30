@@ -231,3 +231,105 @@ The IDR message is emitted at `src/video.cpp:1867-1869` when a submitted frame c
 3. I1 + I3 (3 lines total, both in different components)
 4. A3 (audio converter placement — largest structural change in the list)
 5. Config-only items: V4, V5, I5
+
+---
+
+## F. Change status and known behaviours
+
+### Status since this audit was written
+
+Fixed on `main` of this fork:
+
+| Item | Commit | Note |
+|---|---|---|
+| Capture callback race, sample-buffer lifetime, dummy-frame format, `nv12_zero_device` lifetime | `ae2cd04b` | Also raised `SCStreamConfiguration.queueDepth` from 5 to 16 for buffer lifetime, not throughput. |
+| N1 missing `frame_timestamp` | `5954394f` | `frame_processing_latency` sent to the client and the RTP clock now use real capture time instead of rate-control pacing. |
+| N3 + A4 audio semaphore | `b53ab893` | Signal only when the consumer is parking; wait timeout 5s → 200ms; timeout silence is now submitted instead of discarded. |
+| A3 unconverted audio on conversion failure | `3e3b6cf6` | Replaced with silence in the client's channel layout, counted and reported off the IOProc. |
+| V3 capture queue QoS | `81c736a9` | `QOS_CLASS_USER_INTERACTIVE`, with the queueing delay now measured. |
+| I3 100 ms sleep on the input worker | `188b5bac` | Second delayed task; cancellable through `home_release_id`. |
+| A2 whole-queue audio drop | this pass | `safe::queue_t::overflow_policy_e::drop_one_oldest` plus an overflow counter reported every 10 s. |
+| V2 idle re-delivery | this pass | ScreenCaptureKit status deliveries with no image are skipped and counted. |
+| N2 unconditional pixel-buffer lock | this pass | `requires_cpu_copy()` plus a lazy lock; measured offline in `tests/unit/platform/macos/test_pixel_buffer_lock.cpp`. |
+
+Not changed, with the reasons below: I1, I2, I4, I5, I6, I7.
+
+### I2 (open) — per-event WindowServer position query and cursor warp
+
+**Where:** `third-party/libvirtualhid/src/platform/macos/macos_backend.cpp` at the pinned submodule commit `53e1a949`: `current_location()` (a `CGEventCreate` + `CGEventGetLocation` round-trip per call) is invoked from `submit_relative_motion()`, `submit_absolute_motion()` and `submit_button()`, and `post_mouse()` ends with an unconditional `CGWarpMouseCursorPosition(location)`.
+
+**Why it is not patched here:** the file lives in a submodule whose remote is the LizardByte upstream. This fork must not modify upstream code, `saxlamen/libvirtualhid` does not exist yet, and moving the submodule gitlink to a commit that exists only in a local checkout would break every other build. Applying the change therefore requires a fork of the library first.
+
+**To apply later:** fork `LizardByte/libvirtualhid` into the user's GitHub account, add a branch with the patch below, push it, then point the submodule at that commit and record the bump with a `chore(deps):` commit. Re-test the three pointer paths (relative motion, absolute motion, button click) plus pointer-acceleration feel, because the warp is what keeps the OS cursor in sync in absolute mode.
+
+**Suggested patch (illustrative; `post_mouse()` is `const`, so the cache members are `mutable` and must be guarded by the existing `mutex_`):**
+
+```diff
+       CGPoint current_location() const {
++        // This process warps the cursor, so it already knows where it put it. The WindowServer
++        // round-trip is only needed for the first event after the backend opens.
++        if (has_last_location_) {
++          return last_location_;
++        }
+         const auto snapshot_event = CGEventCreate(state_->source);
+         if (!snapshot_event) {
+           const auto display_bounds = CGDisplayBounds(state_->display);
+           return display_bounds.origin;
+         }
+ 
+         const auto current = CGEventGetLocation(snapshot_event);
+         CFRelease(snapshot_event);
++        last_location_ = current;
++        has_last_location_ = true;
+         return current;
+       }
+ 
+       OperationStatus post_mouse(
+         CGMouseButton button,
+         CGEventType type,
+         CGPoint raw_location,
+         CGPoint previous_location,
+-        int click_count
++        int click_count,
++        bool warp_cursor
+       ) const {
+         ...
+         CGEventPost(kCGHIDEventTap, event);
+-        CGWarpMouseCursorPosition(location);
++        if (warp_cursor) {
++          CGWarpMouseCursorPosition(location);
++          // Without this the WindowServer suppresses local cursor motion for ~250ms after a warp.
++          CGEventSourceSetLocalEventsSuppressionInterval(state_->source, 0.0);
++        }
++        last_location_ = location;
++        has_last_location_ = true;
+         return OperationStatus::success();
+       }
+ 
+       OperationStatus submit_relative_motion(std::int32_t delta_x, std::int32_t delta_y) {
+         const auto current = current_location();
+         const auto location = CGPoint {current.x + delta_x, current.y + delta_y};
+         const auto motion = macos_mouse_motion(mouse_down_);
+-        return post_mouse(motion.button, motion.event_type, location, current, 0);
++        // The event already carries the deltas; warping here additionally drags the OS cursor
++        // through the pointer accelerator on every motion event.
++        return post_mouse(motion.button, motion.event_type, location, current, 0, false);
+       }
+ 
+-Mutable members to add: `mutable CGPoint last_location_ {}; mutable bool has_last_location_ {false};`
+```
+
+### I1 (open) — keyboard at the session tap, mouse at the HID tap
+Same submodule boundary as I2. Keyboard events go to `kCGSessionEventTap` while mouse events go to `kCGHIDEventTap`, with different event source states. Moving keyboard posting to the HID tap is a one-line change per call site but changes how applications observe modifier flags, so it needs a modifier-heavy regression pass. Deferred with I2.
+
+### I4 (documented, no change) — pointer acceleration
+There is no supported per-process API to disable pointer acceleration for injected events. Keep the guidance: turn pointer acceleration off on the host when playing games, and do not add a second motion field to an event that already carries an absolute location (see I2).
+
+### I5 (documented, no change) — scroll configuration
+`high_resolution_scrolling` and `macos_smooth_scrolling` both gate the pixel path, and the host-side inertia simulation runs an 8 ms loop at `QOS_CLASS_USER_INTERACTIVE`. That loop is a deliberate touch-pad simulation, not a defect. For the lowest scroll latency set `macos_smooth_scrolling = disabled`; the setting is per-user, so it is not changed in code.
+
+### I6 (documented, no change) — `virtual_display = disabled`
+Disabling it keeps the 5 second display-creation wait off the session handshake, at the cost of never applying a client-requested resolution: capture stays at the display's native mode and the frame is scaled. If resolution control is wanted, re-enable it and replace the fixed 5 s wait with a poll for the display to appear.
+
+### I7 (documented, no change) — gamepad emulation fallback
+The native IOKit gamepad path is always used on macOS; the CGEvent keyboard/mouse fallback and the throwaway `IOHIDUserDevice` probe are start-up cost rather than steady-state latency. Pen and touch backends are unimplemented in the library while the corresponding capability flags default to on, which costs capability-negotiation noise only.
