@@ -1703,6 +1703,10 @@ namespace video {
       bool artificial_reinit = false;
 
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        // stream.cpp consumes img_t::frame_timestamp for the RTP clock and for the host
+        // processing latency statistics. Stamp here, before the frame is handed to the sessions.
+        detail::stamp_frame_timestamp(img, frame_captured, std::chrono::steady_clock::now());
+
         KITTY_WHILE_LOOP(auto capture_ctx = std::begin(capture_ctxs), capture_ctx != std::end(capture_ctxs), {
           if (!capture_ctx->images->running()) {
             capture_ctx = capture_ctxs.erase(capture_ctx);
@@ -2750,6 +2754,10 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        // Same stamping rule as the asynchronous capture path: the timestamp must exist before
+        // convert() and encode() build the packet out of this frame.
+        detail::stamp_frame_timestamp(img, frame_captured, std::chrono::steady_clock::now());
+
         while (encode_session_ctx_queue.peek()) {
           auto encode_session_ctx = encode_session_ctx_queue.pop();
           if (!encode_session_ctx) {
@@ -3758,5 +3766,13 @@ namespace video {
 
     return platf::pix_fmt_e::unknown;
   }
+
+  namespace detail {
+    void stamp_frame_timestamp(const std::shared_ptr<platf::img_t> &img, bool frame_captured, std::chrono::steady_clock::time_point capture_time) {
+      if (frame_captured && img && !img->frame_timestamp) {
+        img->frame_timestamp = capture_time;
+      }
+    }
+  }  // namespace detail
 
 }  // namespace video

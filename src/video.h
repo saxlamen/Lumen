@@ -778,4 +778,23 @@ namespace video {
     const AVRational fps = framerate_to_rational(config);
     return std::chrono::nanoseconds {(static_cast<int64_t>(fps.den) * 1'000'000'000LL) / fps.num};
   }
+
+  /**
+   * @brief Internals of the video pipeline that are exposed so they can be tested directly.
+   */
+  namespace detail {
+    /**
+     * @brief Attach a capture timestamp to a frame before it is handed to the encode sessions.
+     *
+     * stream.cpp consumes img_t::frame_timestamp for the video RTP clock and for the host
+     * processing latency statistics. A capture backend that knows the real capture instant fills
+     * the value in itself, so an existing timestamp is never overwritten. Frames that were not
+     * captured in this callback are left untouched.
+     *
+     * @param img Captured image, which may be empty when the backend produced no frame.
+     * @param frame_captured True when the backend produced a frame for this callback.
+     * @param capture_time Timestamp to attach when the backend did not supply one.
+     */
+    void stamp_frame_timestamp(const std::shared_ptr<platf::img_t> &img, bool frame_captured, std::chrono::steady_clock::time_point capture_time);
+  }  // namespace detail
 }  // namespace video

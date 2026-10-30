@@ -409,3 +409,48 @@ TEST(SoftwareEncoderConversion, Bgr0AndNv12) {
   fallback_nv12_img.row_pitch = w;
   EXPECT_EQ(device.convert(fallback_nv12_img), 0);
 }
+
+/**
+ * @brief A captured frame without a backend timestamp receives one before it is submitted.
+ */
+TEST(FrameTimestampTest, StampsFrameWithoutTimestamp) {
+  auto img = std::make_shared<platf::img_t>();
+  const auto capture_time = std::chrono::steady_clock::now();
+
+  video::detail::stamp_frame_timestamp(img, true, capture_time);
+
+  ASSERT_TRUE(img->frame_timestamp.has_value());
+  EXPECT_EQ(*img->frame_timestamp, capture_time);
+}
+
+/**
+ * @brief A timestamp supplied by the capture backend is never overwritten.
+ */
+TEST(FrameTimestampTest, KeepsBackendTimestamp) {
+  auto img = std::make_shared<platf::img_t>();
+  const auto backend_time = std::chrono::steady_clock::time_point {std::chrono::milliseconds {1234567}};
+  img->frame_timestamp = backend_time;
+
+  video::detail::stamp_frame_timestamp(img, true, std::chrono::steady_clock::now());
+
+  ASSERT_TRUE(img->frame_timestamp.has_value());
+  EXPECT_EQ(*img->frame_timestamp, backend_time);
+}
+
+/**
+ * @brief Callbacks that produced no frame leave the image unstamped.
+ */
+TEST(FrameTimestampTest, IgnoresCallbacksWithoutFrame) {
+  auto img = std::make_shared<platf::img_t>();
+
+  video::detail::stamp_frame_timestamp(img, false, std::chrono::steady_clock::now());
+
+  EXPECT_FALSE(img->frame_timestamp.has_value());
+}
+
+/**
+ * @brief A missing image is tolerated, because the synchronous path can push an empty frame.
+ */
+TEST(FrameTimestampTest, ToleratesMissingImage) {
+  video::detail::stamp_frame_timestamp(nullptr, true, std::chrono::steady_clock::now());
+}
