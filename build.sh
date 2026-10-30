@@ -58,12 +58,23 @@ if [[ -z "$SIGN_IDENTITY" ]]; then
 fi
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
-  codesign -s "$SIGN_IDENTITY" --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"
+  if ! codesign -s "$SIGN_IDENTITY" --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"; then
+    echo "    Warning: Signing with '$SIGN_IDENTITY' failed (keychain locked?), falling back to ad-hoc signing."
+    codesign -s - --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"
+  fi
 else
   echo "    Warning: Developer certificate not found, using ad-hoc signing."
   codesign -s - --identifier "com.saxlamen.lumen" --force "$LUMEN_BIN"
 fi
 
 echo "==> Restarting lumen service..."
-brew services start lumen
+if ! brew services start lumen; then
+  PLIST_SRC="$(brew --prefix lumen)/sh.brew.lumen.plist"
+  PLIST_DST="$HOME/Library/LaunchAgents/sh.brew.lumen.plist"
+  if [[ -f "$PLIST_SRC" ]]; then
+    cp "$PLIST_SRC" "$PLIST_DST"
+    launchctl bootout "gui/$(id -u)/sh.brew.lumen" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
+  fi
+fi
 echo "==> Done."

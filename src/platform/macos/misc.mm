@@ -282,96 +282,113 @@ namespace platf {
     return ::virtual_display_get_id();
   }
 
-  static pid_t g_restart_child_pid = 0;  ///< PID of the restarted child process for signal forwarding.
-
   /**
-   * @brief Forward a signal to the restarted child process.
+   * @brief Restart the Lumen process on macOS.
    *
-   * This handler is installed in the parent (supervisor) process after forking
-   * the new Sunshine instance. It ensures that signals like SIGINT (Ctrl+C)
-   * are delivered to the child.
-   *
-   * @param sig The signal number to forward.
+   * Spawns a detached helper process that closes inherited file descriptors,
+   * waits for the parent process to finish graceful shutdown, and restarts
+   * the Homebrew launchd service (`sh.brew.lumen` or `homebrew.mxcl.lumen`)
+   * via `launchctl` when the LaunchAgent plist is present, or re-executes
+   * the binary directly when running standalone.
    */
-  static void forward_signal_to_child(int sig) {
-    if (g_restart_child_pid > 0) {
-      kill(g_restart_child_pid, sig);
+  void restart() {
+    const uid_t uid = getuid();
+    const pid_t parent_pid = getpid();
+    const char *home = getenv("HOME");
+
+    std::string plist_path;
+    std::string service_label;
+    if (home != nullptr) {
+      const std::string sh_brew_plist = std::string(home) + "/Library/LaunchAgents/sh.brew.lumen.plist";
+      const std::string legacy_brew_plist = std::string(home) + "/Library/LaunchAgents/homebrew.mxcl.lumen.plist";
+      if (access(sh_brew_plist.c_str(), F_OK) == 0) {
+        plist_path = sh_brew_plist;
+        service_label = "sh.brew.lumen";
+      } else if (access(legacy_brew_plist.c_str(), F_OK) == 0) {
+        plist_path = legacy_brew_plist;
+        service_label = "homebrew.mxcl.lumen";
+      }
     }
-  }
+    if (plist_path.empty() && access("/opt/homebrew/opt/lumen/sh.brew.lumen.plist", F_OK) == 0) {
+      plist_path = "/opt/homebrew/opt/lumen/sh.brew.lumen.plist";
+      service_label = "sh.brew.lumen";
+    }
 
-  /**
-   * @brief Request a Sunshine process restart on exit.
-   *
-   * This is registered as an atexit handler by restart(). It forks a child
-   * process with a fresh PID so that macOS WindowServer treats it as a new
-   * application (required for the system tray icon to reinitialize).
-   *
-   * The parent process stays alive as a transparent supervisor: it forwards
-   * signals (SIGINT, SIGTERM, SIGHUP) to the child and blocks in waitpid().
-   * This keeps the shell tracking the original PID as its foreground job,
-   * preserving Ctrl+C and terminal log output.
-   */
-  void restart_on_exit() {
-    char executable[2048];
+    char executable[2048] = {};
     uint32_t size = sizeof(executable);
-    if (_NSGetExecutablePath(executable, &size) < 0) {
-      BOOST_LOG(fatal) << "NSGetExecutablePath() failed: "sv << errno;
-      return;
-    }
+    const bool has_executable = (_NSGetExecutablePath(executable, &size) == 0);
 
-    // ASIO doesn't use O_CLOEXEC, so we have to close all fds ourselves.
-    int openmax = (int) sysconf(_SC_OPEN_MAX);
-    for (int fd = STDERR_FILENO + 1; fd < openmax; fd++) {
-      close(fd);
-    }
-
-    // Fork a child process to get a fresh PID.
-    // A new PID is required on macOS because WindowServer associates GUI state
-    // (tray icons, activation policy) with the PID. After execv with the same PID,
-    // WindowServer retains stale state and silently refuses to show new tray icons.
-    pid_t child = fork();
-    if (child < 0) {
+    const pid_t pid = fork();
+    if (pid < 0) {
       BOOST_LOG(fatal) << "fork() failed: "sv << errno;
       return;
     }
 
-    if (child == 0) {
-      // Child: create a new process group so that the parent's signal
-      // forwarding targets only this child, not the parent itself.
-      setpgid(0, 0);
-
-      // Replace this child with the new Sunshine instance
-      execv(executable, lifetime::get_argv());
-
-      // If execv fails, exit the child immediately without running atexit handlers
-      _exit(1);
+    if (pid > 0) {
+      // Parent - initiate graceful shutdown
+      lifetime::exit_sunshine(0, true);
+      return;
     }
 
-    // Parent: become a transparent supervisor.
-    // The parent stays alive so the shell continues to track it as the
-    // foreground job, keeping Ctrl+C and terminal output working.
-    g_restart_child_pid = child;
+    // Child - detach from parent's process group and ignore termination signals
+    // so launchctl bootout does not kill this helper before bootstrap runs.
+    setsid();
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
 
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = forward_signal_to_child;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigaction(SIGINT, &sa, nullptr);
-    sigaction(SIGTERM, &sa, nullptr);
-    sigaction(SIGHUP, &sa, nullptr);
+    // Close all inherited file descriptors (especially listening sockets)
+    // immediately so the new instance does not hit EADDRINUSE.
+    const int openmax = static_cast<int>(sysconf(_SC_OPEN_MAX));
+    for (int fd = STDERR_FILENO + 1; fd < openmax; fd++) {
+      close(fd);
+    }
 
-    int status;
-    waitpid(child, &status, 0);
+    // Wait up to 5 seconds for the parent process to fully exit
+    for (int i = 0; i < 50; ++i) {
+      if (kill(parent_pid, 0) != 0) {
+        break;
+      }
+      usleep(100000);
+    }
+    usleep(200000);
 
-    // Exit immediately without running additional atexit handlers or
-    // static destructors. The child has already taken over.
-    _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 1);
+    if (!plist_path.empty() && !service_label.empty()) {
+      char cmd[8192];
+      snprintf(cmd, sizeof(cmd), "launchctl bootout gui/%d/%s 2>/dev/null", uid, service_label.c_str());
+      system(cmd);
+
+      usleep(200000);
+
+      snprintf(cmd, sizeof(cmd), "launchctl bootstrap gui/%d \"%s\"", uid, plist_path.c_str());
+      if (system(cmd) == 0) {
+        _exit(0);
+      }
+    }
+
+    if (has_executable) {
+      execv(executable, lifetime::get_argv());
+    }
+
+    _exit(0);
   }
 
-  void restart() {
-    // Gracefully clean up and restart ourselves instead of exiting
-    atexit(restart_on_exit);
+  /**
+   * @brief Quit the Lumen process and unload the Homebrew launchd service on macOS.
+   */
+  void quit() {
+    // Do launchctl cleanup synchronously before shutting down so `brew services start` works afterwards
+    const uid_t uid = getuid();
+    char cmd[512];
+    snprintf(
+      cmd,
+      sizeof(cmd),
+      "launchctl bootout \"gui/%d/sh.brew.lumen\" 2>/dev/null; launchctl bootout \"gui/%d/homebrew.mxcl.lumen\" 2>/dev/null",
+      uid,
+      uid
+    );
+    system(cmd);
+
     lifetime::exit_sunshine(0, true);
   }
 

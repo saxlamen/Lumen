@@ -978,7 +978,15 @@ namespace platf {
   void streaming_will_start();
   void streaming_will_stop();
 
+  /**
+   * @brief Restart the Sunshine process.
+   */
   void restart();
+
+  /**
+   * @brief Quit the Sunshine process and clean up platform service state if applicable.
+   */
+  void quit();
 
   /**
    * @brief Platform buffer pointer and size for batched socket sends.
