@@ -49,6 +49,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_audio.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_audio.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_img_t.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/audio_consumer_gate.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_video.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_video.m"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.h"

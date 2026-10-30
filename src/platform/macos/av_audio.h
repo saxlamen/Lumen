@@ -18,6 +18,7 @@
 #import <CoreAudio/CoreAudio.h>
 
 // standard includes
+#include <atomic>
 #include <functional>
 
 // lib includes
@@ -114,6 +115,8 @@ typedef struct {
 @public
   TPCircularBuffer audioSampleBuffer;  ///< Shared circular buffer for both audio capture paths
   dispatch_semaphore_t audioSemaphore;  ///< Real-time safe semaphore for signaling audio sample availability
+  std::atomic<bool> consumerWaiting;  ///< Parking request set by the audio consumer, consumed by platf::audio_data_ready()
+  std::atomic<unsigned int> converterFailures;  ///< Count of IOProc conversions that failed and were replaced with silence
 @private
   // System-wide audio tap components (Core Audio)
   AudioObjectID tapObjectID;  ///< Core Audio tap object identifier for system audio capture

@@ -7,6 +7,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/macos/audio_capture.h"
+#include "src/platform/macos/audio_consumer_gate.h"
 #include "src/platform/macos/av_audio.h"
 #include "src/platform/macos/sc_audio.h"
 
@@ -40,15 +41,29 @@ namespace platf {
         void *tail = TPCircularBufferTail(&av_audio_capture->audioSampleBuffer, &avail);
 
         if (avail == 0) {
-          // Using 5 second timeout to prevent indefinite hanging
-          dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 5LL * NSEC_PER_SEC);
-          if (dispatch_semaphore_wait(av_audio_capture->audioSemaphore, timeout) != 0) {
-            BOOST_LOG(warning) << "Audio sample timeout - no audio data received within 5 seconds"sv;
+          const auto wait_started = std::chrono::steady_clock::now();
+          const auto status = platf::audio_wait_for_data(
+            av_audio_capture->audioSemaphore,
+            av_audio_capture->consumerWaiting,
+            audio_wait_timeout,
+            [this]() {
+              uint32_t pending = 0;
+              TPCircularBufferTail(&av_audio_capture->audioSampleBuffer, &pending);
+              return pending > 0;
+            }
+          );
 
-            // Fill with silence and return to prevent hanging
+          report_audio_wait(status, std::chrono::steady_clock::now() - wait_started);
+
+          if (status == platf::audio_wait_e::timed_out) {
+            BOOST_LOG(warning) << "Audio sample timeout - no audio data received within "sv << audio_wait_timeout.count() << "ms"sv;
+
+            // Silence is returned to the pipeline, which still submits the frame, so the client
+            // keeps receiving audio at the expected rate instead of a gap
             std::fill(sample_in.begin(), sample_in.end(), 0.0f);
             return capture_e::timeout;
           }
+
           continue;
         }
 
@@ -63,6 +78,60 @@ namespace platf {
 
       return capture_e::ok;
     }
+
+    /**
+     * @brief Report how long the consumer waited for samples and why the wait ended.
+     *
+     * The wait time is the observable cost of the CoreAudio IOProc cadence: a granted buffer size
+     * larger than the requested audio frame shows up here as a steady floor. A spurious wait
+     * result means a semaphore token was left behind, which is the failure mode this path is
+     * designed to prevent, so it is reported as a warning rather than counted silently.
+     *
+     * @param status Result of the wait.
+     * @param waited How long the wait took.
+     */
+    void report_audio_wait(platf::audio_wait_e status, std::chrono::steady_clock::duration waited) {
+      wait_latency_logger.collect_and_log(std::chrono::duration<double, std::milli> {waited}.count());
+
+      if (status == platf::audio_wait_e::spurious) {
+        ++stale_wakeups;
+      }
+
+      const auto now = std::chrono::steady_clock::now();
+      if (now - last_audio_report < audio_report_interval) {
+        return;
+      }
+      last_audio_report = now;
+
+      const auto failures = av_audio_capture->converterFailures.load(std::memory_order_relaxed);
+      if (stale_wakeups > 0) {
+        BOOST_LOG(warning) << "Audio: "sv << stale_wakeups << " stale wakeups since the last report"sv;
+        stale_wakeups = 0;
+      }
+      if (failures != reported_converter_failures) {
+        BOOST_LOG(warning) << "Audio: "sv << failures << " converter failures total, silence substituted for the affected frames"sv;
+        reported_converter_failures = failures;
+      }
+    }
+
+    /**
+     * @brief Periodic aggregate of consumer wait time, reported at debug severity.
+     */
+    logging::min_max_avg_periodic_logger<double> wait_latency_logger {debug, "Audio: consumer wait", "ms"};
+
+    /**
+     * @brief How long to wait for a producer signal before giving up on the current frame.
+     */
+    static constexpr std::chrono::milliseconds audio_wait_timeout {200};
+
+    /**
+     * @brief Minimum spacing between summary warnings for stale wakeups and converter failures.
+     */
+    static constexpr std::chrono::seconds audio_report_interval {10};
+
+    uint64_t stale_wakeups {};  ///< Waits that consumed a semaphore token without finding samples.
+    uint64_t reported_converter_failures {};  ///< Converter failure count already reported.
+    std::chrono::steady_clock::time_point last_audio_report {std::chrono::steady_clock::now()};  ///< Last summary report timestamp.
   };
 
   /**

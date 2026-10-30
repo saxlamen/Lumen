@@ -15,6 +15,7 @@
 #include <atomic>
 
 // local includes
+#include "audio_consumer_gate.h"
 #include "coreaudio_helpers.h"
 #include "src/logging.h"
 #include "src/utility.h"
@@ -202,9 +203,9 @@ namespace platf {
       }
     }
 
-    // Signal new data arrival - using real-time safe C-based semaphore
-    // instead of Objective-C NSCondition to meet real-time audio constraints
-    dispatch_semaphore_signal(avAudio->audioSemaphore);
+    // Signal new data arrival - only wakes a consumer that has declared it is parking, so a
+    // producer that runs while the consumer is still draining the ring leaves no token behind.
+    platf::audio_data_ready(avAudio->audioSemaphore, avAudio->consumerWaiting);
 
     return noErr;
   }
@@ -375,7 +376,7 @@ namespace platf {
     AudioBuffer audioBuffer = audioBufferList.mBuffers[0];
 
     TPCircularBufferProduceBytes(&self->audioSampleBuffer, audioBuffer.mData, audioBuffer.mDataByteSize);
-    dispatch_semaphore_signal(self->audioSemaphore);
+    platf::audio_data_ready(self->audioSemaphore, self->consumerWaiting);
   }
 }
 
@@ -533,6 +534,8 @@ namespace platf {
     dispatch_release(self->audioSemaphore);
   }
   self->audioSemaphore = dispatch_semaphore_create(0);
+  self->consumerWaiting.store(false);
+  self->converterFailures.store(0);
 
   BOOST_LOG(debug) << "Audio buffer initialized successfully with size: "sv << ringBufferSize << " bytes"sv;
 }
@@ -543,7 +546,7 @@ namespace platf {
 
   // Signal any waiting threads before cleanup and release semaphore
   if (self->audioSemaphore) {
-    dispatch_semaphore_signal(self->audioSemaphore);  // Wake up any waiting threads
+    platf::audio_consumer_wake(self->audioSemaphore);  // Wake up any waiting threads
     dispatch_release(self->audioSemaphore);
     self->audioSemaphore = NULL;
   }

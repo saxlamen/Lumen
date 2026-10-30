@@ -254,7 +254,10 @@ namespace audio {
         case platf::capture_e::ok:
           break;
         case platf::capture_e::timeout:
-          continue;
+          // The platform produced no samples within its wait window and handed back silence.
+          // Submitting it keeps the client fed at the expected rate; skipping the frame would
+          // turn a short capture hiccup into an audible gap.
+          break;
         case platf::capture_e::reinit:
           BOOST_LOG(info) << "Reinitializing audio capture"sv;
           mic.reset();
