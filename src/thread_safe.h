@@ -400,6 +400,7 @@ namespace safe {
      */
     enum class overflow_policy_e {
       drop_oldest,  ///< Clear the queue and accept the new item (current default behavior)
+      drop_one_oldest,  ///< Discard only the oldest item and accept the new item
       reject  ///< Refuse the new item, leaving existing queued items intact
     };
 
@@ -430,10 +431,20 @@ namespace safe {
       }
 
       if (_queue.size() >= _max_elements) {
-        if (_overflow_policy == overflow_policy_e::reject) {
-          return false;
+        switch (_overflow_policy) {
+          case overflow_policy_e::reject:
+            // The incoming item is the one that gets discarded
+            _overflow_count.fetch_add(1, std::memory_order_relaxed);
+            return false;
+          case overflow_policy_e::drop_one_oldest:
+            _queue.erase(std::begin(_queue));
+            _overflow_count.fetch_add(1, std::memory_order_relaxed);
+            break;
+          case overflow_policy_e::drop_oldest:
+            _overflow_count.fetch_add(_queue.size(), std::memory_order_relaxed);
+            _queue.clear();
+            break;
         }
-        _queue.clear();
       }
 
       _queue.emplace_back(std::forward<Args>(args)...);
@@ -531,6 +542,19 @@ namespace safe {
       return _continue;
     }
 
+    /**
+     * @brief Number of items discarded because the queue was at its bound.
+     *
+     * Items dropped by every policy are counted: one per item removed by drop_one_oldest, the
+     * whole backlog for drop_oldest, and one for each item refused by reject. Callers use this to
+     * turn a silent data loss into a reported number.
+     *
+     * @return Total items discarded since construction.
+     */
+    [[nodiscard]] std::uint64_t overflow_count() const {
+      return _overflow_count.load(std::memory_order_relaxed);
+    }
+
   private:
     bool _continue {true};
     std::uint32_t _max_elements;
@@ -540,6 +564,7 @@ namespace safe {
 
     std::vector<T> _queue;
     overflow_policy_e _overflow_policy;
+    std::atomic<std::uint64_t> _overflow_count {0};  ///< Items discarded at capacity, readable without the queue lock.
   };
 
   /**
