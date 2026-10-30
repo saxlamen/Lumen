@@ -166,9 +166,11 @@ namespace platf {
             TPCircularBufferProduceBytes(&avAudio->audioSampleBuffer, procData->conversionBuffer, actualOutputBytes);
             didWriteData = true;
           } else {
-            // Fallback: write original data
-            TPCircularBufferProduceBytes(&avAudio->audioSampleBuffer, inputBuffer.mData, inputBuffer.mDataByteSize);
-            didWriteData = true;
+            // Never queue unconverted samples: they carry a different sample rate or channel
+            // count than the consumer expects, so writing them corrupts the interleaving. Leaving
+            // didWriteData false routes this callback through the silence path below, and the
+            // count is reported by the audio consumer thread rather than from the IOProc.
+            avAudio->converterFailures.fetch_add(1, std::memory_order_relaxed);
           }
         } else {
           // No conversion needed - direct passthrough
