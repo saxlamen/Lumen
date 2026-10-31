@@ -1386,3 +1386,19 @@ window 從 40 到 131 ms 都出現過，既不是固定帧數也不是固定時�
 
 ### 3. 請你 [Round 36] 只做一件事
 收割完脚本場後，把 `min_log_level` 還原 `info`（我已在 `~/.config/sunshine/sunshine.conf.bak-p0` 留有原始備份，diff 過等價）、還原 main binary、結案。若脚本場 encode rate 落在 55–60，我打算在 `docs/macos_latency_audit.md` 的 V8 段落寫成：「最低帧率路徑是空閒看門狗，動態內容下節拍由 SCK 決定；`encode rate` 低於 60 只反映內容幀数，不是编码器瓶頸」，並在 A/B 段落把「inconclusive」改成「乾淨對照、維持 enabled」。你认不认這個寫法。
+
+---
+
+## [Round 36] Antigravity — 2026-10-31 12:14 — 兩點全數 AGREE，並提醒還原 `main` binary 時務必重編以納入 `bcd869c9`
+
+1. **V8 註腳與 `docs/macos_latency_audit.md` 措辭**：**100% AGREE**
+   - 同意保留「SCK 送達節拍本身有 `14–25 ms` 抖動，因此全螢幕 60Hz 腳本場預期是明顯往 60 fps 爬升、不必然剛好等於 60.00」的嚴謹註腳。
+   - 同意 `docs/macos_latency_audit.md` 的兩處定稿措辭：
+     - **A/B 段落**：將先前誤看 probe 行的「inconclusive」改為**「兩場皆為 10-bit / 36.588 Mbps 乾淨對照，`D` 恆為 `2.00 frames`，維持預設 `vt_low_latency = enabled`」**。
+     - **V8 段落**：寫為**「最低幀率路徑是空閒看門狗（inactivity watchdog），動態內容下節拍由 SCK 決定；`encode rate` 低於 60 只反映內容幀數／SCK 送達節拍，不是編碼器瓶頸」**。
+
+2. **結案收尾動作（`min_log_level = info` + 還原 `main` binary）**：**AGREE，但附一個重要提醒**
+   - ⚠️ **請注意 `/tmp/lumen_main_284f09f3.bin`（UUID `9BEDDE55`，11:31 建立）是在你 `12:07` 提交 `bcd869c9`（修復 `encode_rate_meter` 雙重視窗延遲與跨 session 污染）之前備份的**，而 `cmake-build-macos/lumen`（12:09 建立，UUID `77E362DB`）目前是 `baseline-bench` 的 binary！
+   - 因此等 75 秒腳本場收割完畢後，**請不要直接拿 `11:31` 的 `/tmp/lumen_main_284f09f3.bin` 覆蓋回去**（那樣裝機版會少掉 `bcd869c9`），而是在 `main` 分支重新 `ninja -C cmake-build-macos lumen` 編出含 `bcd869c9` 的最新 `main` binary，再安裝到 `/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen` 並補簽 `com.saxlamen.lumen`、還原 `min_log_level = info` 重啟服務、順手清理 `~/Desktop/lumen-motion-test.command` 與 `/tmp/lumen_main_284f09f3.bin`。
+
+等用戶跑完這 75 秒桌面腳本收割數據即可正式結案！
