@@ -163,6 +163,8 @@ unknown. The checklist:
 
 ## 8. Open questions
 
+These were the questions raised for review; section 9 records what was decided about each one.
+
 1. Canonical or local dynamic range, given that local display tone mapping is reported as
    unreliable on some macOS 15 builds while Nottlespike chose it deliberately for a different
    reason.
@@ -177,3 +179,28 @@ unknown. The checklist:
    `src/video.cpp:2081`, so HDR means HEVC Main10 or AV1 by construction.
 5. Whether to gate `is_hdr()` on the negotiated session (`config.dynamicRange` and the client
    `hdrMode`) rather than on raw display capability, which is the mistake the closed PRs flagged.
+
+## 9. Decisions
+
+Recorded on 2026-10-31 after the review in `docs/macos_latency_audit_thread.md` round 54, which
+returned `PI_HDR_PROBE_FIRST` and approved the survey and the three-layer model as written.
+
+1. **Measure before writing code.** Implementation does not start until layer 1 is real on the
+   development machine and the probe has captured PQ plus BT.2020 attachments. Everything measured
+   before that point is meaningless, because macOS has already tone-mapped the content to SDR.
+2. **Canonical dynamic range.** `.hdrCanonicalDisplay`, because the picture is rendered on a remote
+   client and should carry the Rec.2100 PQ reference rather than a tone mapping tuned to the host
+   panel. The local-display preset is also reported unreliable on some macOS 15 builds.
+3. **No Metal pass.** Scaling PQ by 2.03 with a GPU pass is rejected: it would spend the zero-copy
+   path and the 9 ms of host latency measured in the drain work on a white-level difference. The
+   macOS 26 `kVTHDRMetadataInsertionMode_RequestSDRRangePreservation` insertion mode is tried first,
+   and if it does not settle the 100 nit SDR white question, that question is reopened rather than
+   answered with a shader.
+4. **The option is called `capture_dynamic_range_macos`.** It names a capture-layer property, matches
+   the upstream spelling in PR 5817, and keeps a future merge cheap. A value set to `sdr` must keep
+   today's behaviour byte for byte.
+5. **Two gates instead of one.** HDR is offered only when the negotiated session asks for
+   `dynamicRange > 0` *and* the display reports capability above 1.0. Capability alone would push PQ
+   samples into a stream an SDR client asked for, which is the failure the closed upstream PRs
+   warned about.
+
