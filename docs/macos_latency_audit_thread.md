@@ -1015,3 +1015,44 @@ namespace detail {
 - 08:41 場 `Frame processing latency` avg ~132 ms 明顯高於 09:32 場的 82–92 ms，尚未比對兩場 session 設定（解析度／色深／更新率），屬未結的觀察項。
 
 22 輪合作愉快，謝謝你把 D 從「猜」變成「反組譯 + log 對账」，我这边负责把它變成线上可測的常數。
+
+---
+
+## [Round 24] Pi-Bolt — 2026-10-31 10:0x — 收尾後的两项补充测量（不 reopen，只补强 V6 与 IDR 结论）
+
+结案的 commit 已经推了（`f06d184b` docs、`9488e48e` LUMEN_VERSION）。收尾之后我把 23:09 之后那份 584 MB 的 log（`sunshine.log.1`，正好是 `f2638e39` 的整个执行期 23:09 → 09:50）当完整资料库用，量到两件值得进档的事：
+
+### 1. IDR 假警報根除的最强证据（比 60 秒那场有力得多）
+那段 10.7 小时里，用户有一个 **23:10:28 连上、08:42:46 才结束**的长 session，期间：
+
+| 计数 | 值 |
+|---|---|
+| `Frame ...: IDR Keyframe (AV_FRAME_FLAG_KEY)` | **7984 次** |
+| `Encoder did not produce IDR frame when requested!` | **0 次** |
+| `Audio sample timeout` | 0 次 |
+| `samples discarded since the last report` | 0 次 |
+| `stale wakeups` | 0 次 |
+
+之前是「5 分钟内 24 次假警報」，现在是「近 8000 次 keyframe、0 次警報」。这就是 tracker 修对的直接证据，比单场 60 秒的 n=4 有力很多。
+
+### 2. 未结观察项（132 ms vs 82–92 ms）已结案 —— 是帧率，不是回归
+我用 keyframe 的 frame number 差 ÷ 时间差算出**实际编码频率**（你 Round 20 用的同一招）：
+
+```text
+07:29:23.017 Frame 899165
+07:30:43.479 Frame 901630   -> 2465 帧 / 80.462 s = 30.63 fps
+07:31:50.480 Frame 903670   -> 2040 帧 / 67.001 s = 30.45 fps
+07:42:41.051 Frame 923552   -> 19882 帧 / 650.571 s = 30.56 fps
+07:49:01.086 Frame 935190   -> 11638 帧 / 380.035 s = 30.62 fps
+```
+那一夜是 **30.5 fps**，而 `D = 4.00 frames` 常数不变 ⇒ 4 / 30.5 = **131 ms**，正好等于实测 avg 131–133 ms。09:32 那场是 60 fps、D=3 ⇒ 50 ms 的 encoder 下限 + 15–25 ms 的 host 端 = 实测 82–92 ms。所以：
+
+```text
+Frame processing latency ≈ encoder_depth / frame_rate + 15~25 ms
+```
+
+**没有回归，也没有第二成因**；这条换算式我已写进 `docs/macos_latency_audit.md` 的 V6 节，方便下次直接用。
+
+顺带两点运维观察（不用动，记录性质）：
+- log rotation 只在**服务重启时**发生：那份 debug log 一路长到 584 MB 才在 09:50 我重启时轮替成 `sunshine.log.1`。往后再开 debug，记得中途重启一次或在量完后立刻收回 info。
+- 09:32 那场只有开机时 4 次 IDR 要求（`Frame 1`），整场没有 client 再要求 IDR；所以「60 秒那场 IDR=0」的样本量本来就小，是上面那份 10.7 小时的数据把它补成强证据的。

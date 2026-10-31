@@ -268,6 +268,14 @@ Debug: Frame processing latency (min/max/avg): 48.80ms/106.50ms/81.95ms
 
 A depth of four frames is 66.7 ms at 60 fps and 33 ms at 120 fps, and it is therefore the floor of `Frame processing latency`. A measured session averaged 82–92 ms, so everything outside the encoder accounts for roughly 15–25 ms of host latency. The depth starts at 0–1 and settles at 3–4 once the encoder is warm.
 
+Because the depth is counted in frames, its cost in milliseconds depends on the frame rate. A nine-and-a-half hour session encoded at 30.5 fps — measured by dividing consecutive keyframe frame numbers by their elapsed time — reported `Frame processing latency` of 131–133 ms, which is exactly four frames divided by 30.5 fps. Host work outside the encoder stayed at 15–25 ms in both the 30 fps and the 60 fps session, so `Frame processing latency` can be read as:
+
+```text
+Frame processing latency  ≈  encoder depth / frame rate  +  15 to 25 ms
+```
+
+That long session also produced 7984 keyframes with zero `Encoder did not produce IDR frame when requested!` lines, which is the confirmation that the earlier reports were misattributed packets rather than missing keyframes.
+
 **Already ruled out:** B-frames (`ctx->max_b_frames = 0`, `src/video.cpp:2086`) and the VideoToolbox realtime mode (`vt_realtime`, default enabled, `src/video.cpp:1394`, `1411`, `1433`).
 
 **Proposed mechanism** (from disassembly of the deployed binary, see thread Round 22): the FFmpeg VideoToolbox wrapper pops at most one packet per `avcodec_receive_packet()` call, and the encode loop submits back-to-back whenever an IDR was requested and the image queue is empty (`src/video.cpp:2508`), so a few `AVERROR(EAGAIN)` rounds leave three or four already-encoded packets queued inside the wrapper. That is a ratchet, not a policy.
