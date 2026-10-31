@@ -117,3 +117,14 @@ result says nothing about the encoder.
 3. The log contains no `frame_drain` warning, proving the packaged FFmpeg accepts the option.
 4. A build against unpatched FFmpeg still streams, shows the warning once, and returns to the old
    latency: the patch is an improvement, never a requirement.
+
+### Open
+
+- The packaging recipe is not wired yet. `brew reinstall lumen` in the tap downloads the published
+  archive, so that build links unpatched FFmpeg and Lumen prints the `frame_drain` warning until
+  `./build.sh` runs against a patched bundle, which it now does by default. Closing this means either
+  publishing the archive `build-bundle.sh` prints as a release asset of this repository and giving the
+  formula a `resource` block with its SHA-256, or pointing the formula at a local bundle directory.
+- The 4K leg of the drain trade-off is unmeasured in a live session, tracked as V6a in
+  `docs/macos_latency_audit.md`. Until it is measured, the default of draining every submit is a
+  2560x1920 result, not a 4K result.

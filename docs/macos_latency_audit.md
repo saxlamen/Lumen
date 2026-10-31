@@ -252,10 +252,11 @@ Fixed on `main` of this fork:
 | A2 whole-queue audio drop | this pass | `safe::queue_t::overflow_policy_e::drop_one_oldest` plus an overflow counter reported every 10 s. |
 | V2 idle re-delivery | this pass | ScreenCaptureKit status deliveries with no image are skipped and counted. |
 | N2 unconditional pixel-buffer lock | this pass | `requires_cpu_copy()` plus a lazy lock; measured offline in `tests/unit/platform/macos/test_pixel_buffer_lock.cpp`. |
+| V6 VideoToolbox frame accumulation | `3e8e1647` | A `frame_drain` encoder option in a patched FFmpeg drains completed frames every N submits, and `vt_drain` asks for one per submit. Requires the patched bundle, see `third-party/ffmpeg-patches/README.md`. |
 
-Not changed, with the reasons below: I1, I2, I4, I5, I6, I7. Open performance work: V6.
+Not changed, with the reasons below: I1, I2, I4, I5, I6, I7. Open performance work: V6a (the 4K leg of the drain trade-off, deferred) and I2.
 
-### V6 (open, P3) — VideoToolbox keeps three to four frames in flight
+### V6 (resolved) — VideoToolbox kept three to four frames in flight
 
 Called **V4** in `docs/macos_latency_audit_thread.md`; numbered V6 here because V4 and V5 are already taken in this document.
 
@@ -291,6 +292,41 @@ That long session also produced 7984 keyframes with zero `Encoder did not produc
 **Proposed mechanism** (from disassembly of the deployed binary, see thread Round 22): the FFmpeg VideoToolbox wrapper pops at most one packet per `avcodec_receive_packet()` call, and the encode loop submits back-to-back whenever an IDR was requested and the image queue is empty (`src/video.cpp:2508`), so a few `AVERROR(EAGAIN)` rounds leave three or four already-encoded packets queued inside the wrapper. That is a ratchet, not a policy.
 
 **First experiment if this is picked up:** make `AV_CODEC_FLAG_LOW_DELAY` configurable for VideoToolbox sessions and compare encode rate, `Video: encoder output latency` and `Frame processing latency` with it on and off, since the upstream reports above show it trades throughput for the compression window. A second measurement with `encoder = software` gives the lower bound, because software encoders return the packet of the frame that was just submitted. `MaxFrameDelayCount` should not be chased through FFmpeg.
+
+**Resolved, differently from the experiment proposed below.** The ratchet in the last paragraph was the
+right diagnosis, and the fix went to the FFmpeg layer rather than to Lumen: a `frame_drain` encoder
+option drains completed frames every N submissions (`third-party/ffmpeg-patches/build-deps/patches/`,
+wired through `vt_drain` in `3e8e1647`, default one per submit). It addresses exactly the mechanism
+above: `vtenc_q_pop(wait = 0)` takes at most one completed sample without waiting, so the exchange
+could never exceed one packet per submit and the depth ratcheted. `AV_CODEC_FLAG_LOW_DELAY` stayed
+configurable but is no longer the lever.
+
+Measured afterwards: `Video: encoder output latency` reads `0.00 frames` and `Frame processing
+latency` is about 9.0 ms on 2560x1920 HEVC 10-bit at 60 fps, with `Video: encode rate` at 60.00 fps.
+The offline dial (`scripts/vtprobe.m`, `4bc37484`) measures the whole trade-off at 3840x2160 10-bit:
+no drain 66.7 ms at 60.00 fps, every submit 18.1 ms at 50.43 fps, every two submits 33.4 ms at 57.0
+fps, every three 48.9 ms at 59.3 fps. The improvement is not free, it converts latency into encoder
+throughput, which is why the cadence is a knob and why V6a below is still open.
+
+### V6a (open, deferred) — the 4K leg of the drain trade-off was never measured in a session
+
+`vt_drain` defaults to draining every submit. That default is safe where the encoder has headroom,
+which is the only regime measured live: 2560x1920 10-bit holds 60.00 fps at 9.0 ms of host latency.
+The offline probe predicts the opposite regime at 3840x2160 10-bit, where draining every submit yields
+50.43 fps, so a live 4K session could decide that the shipped default should be 2 (33.4 ms at 57.0
+fps) rather than 1.
+
+Deferred because 4K is not a resolution this machine streams. Nothing about a 2560 wide session
+depends on the answer, and the probe figure is itself pessimistic because it paces itself at 16 ms
+instead of the 16.67 ms a display delivers. This item exists so the default is not mistaken for a 4K
+measurement, and because HDR canonical capture is 10-bit 4K by construction.
+
+To close it: put the streamed display at 3840x2160, set `min_log_level = debug` for the window, move
+content on screen for about a minute, then read `Video: encode rate`, `Video: encoder output latency`
+and `Frame processing latency`. Read them from the service log, not from a binary started by hand:
+encoder probe validation fails for every encoder when Screen Recording is not granted, which is the
+same trap recorded in `third-party/ffmpeg-patches/README.md`. If the frame rate falls, either change
+the default in `src/config.h` or document 4K as a `vt_drain = 2` case.
 
 ### I2 (open) — per-event WindowServer position query and cursor warp
 

@@ -144,7 +144,7 @@ measurement is meaningless.
 
 ## 7. Measurements still to run
 
-`/tmp/hdrprobe.swift` (signed as `com.saxlamen.hdrprobe`) already prints the EDR state of every
+`scripts/hdrprobe.swift` (signed as `com.saxlamen.hdrprobe`) already prints the EDR state of every
 screen and dumps the colour attachments of captured frames for SDR and for both HDR presets. It
 needs Screen Recording permission, which has not been granted yet, so the attachment side is still
 unknown. The checklist:
@@ -160,6 +160,22 @@ unknown. The checklist:
    `Video: encoder output latency`, `Frame processing latency` and the queueDepth-8 question under
    10-bit HDR, at both 2560x1920 and 4K, because HDR at 4K is precisely the saturation case where
    `vt_drain` matters.
+
+### Status of the checklist
+
+Every item is open. The probe is built and signed, but Screen Recording has not been granted to it,
+so items 2 to 4 have no data at all.
+
+Item 1 has partial data and it is the limiting fact: the displays in use here report a
+`maximumPotentialExtendedDynamicRangeColorComponentValue` of 1.0, which is plain SDR, so item 4 needs
+an HDR capable panel connected rather than more code. Nothing written here can be confirmed against a
+panel that cannot show HDR.
+
+Item 5 is parked next to `vt_drain`, whose own 4K leg is unmeasured and tracked as V6a in
+`docs/macos_latency_audit.md`. The two are the same question: canonical HDR capture is 10-bit 4K by
+construction, the HDR decisions deliberately avoid the extra Metal pass that would hide encoder cost,
+and a drain cadence that costs frame rate at 4K SDR costs it at 4K HDR too. Whoever picks HDR up
+should close V6a first.
 
 ## 8. Open questions
 
