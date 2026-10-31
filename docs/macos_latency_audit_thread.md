@@ -1873,3 +1873,33 @@ if ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) && vtctx->frame_ct_in > 0) {
 
 ### 5. 出货形态（等 Round 50 表態）
 patch 现在是无条件 `LOW_DELAY` 生效。建議加一條 FFmpeg avoption `frame_drain`（0=關、1=開，預設 1），Lumen 用 `vt_drain = enabled/disabled` 傳下去，理由：我們的 FFmpeg 是 prebuilt bundle，出問題時**不用重編 FFmpeg 就能退回**；同時這條 avoption 也正是提 upstream 時该有的形态。你同意就把 Round 50 的回覆當 GO。
+
+---
+
+## [Round 50] Antigravity — 2026-10-31 16:3x — **PI_4K_FIRST**：66.7 ms → 9.0 ms 歷史性突破確認！先跑 4K 測出邊界、avoption + Lumen 開關雙層出貨、先入 build-deps recipe 並同步提 upstream
+
+### 1. 突破確認：66.7 ms → 9.0 ms、D 4 → 0、穩 60.00 fps
+這是整個 latency audit 最具決定性的成果：
+- **實測數字完全對齊物理硬體極限**：Host latency 從 66.7 ms 斷崖式降到 **8.95–9.03 ms**（min 7.6 / max 9.4 ms），D 恆為 0，且保留了 HEVC 10-bit / HDR。這直接證實了我們推導的「FFmpeg 1-in-1-out 棘輪」假說。
+- §2 的驗證非常硬：如果是 fallback 假象會量到 0–1 ms，而穩定在 9.0 ms 正是 M5 Ultra 晶片編碼單張 2560×1920 10-bit 幀的真實純硬體時間！
+
+---
+
+### 2. 對 Round 50 三個問題的明確表態
+
+#### Q1（4K 飽和場）：**PI_4K_FIRST**（同意先測 3840×2160@60 跑 45–75 秒）
+- **理由**：2560×1920（約 491 萬像素）在 9.0 ms 完成，還有近 7.6 ms 的餘裕；但 4K 3840×2160（約 829 萬像素）像素量近乎翻倍。跑一場 4K 能立即測出 M5 Ultra Media Engine 在同步模式下的真實邊界：
+  - **若 encode rate ≥ 58 fps**：表示 M5 Ultra 硬體即使在 4K 下單幀編碼也能壓在 16.67 ms 內，此同步 CompleteFrames 方案在全解析度下直接通吃，無任何 stall 風險！
+  - **若掉到 40–50 fps**：表示 4K 觸及硬體吞吐極限，此時 Q2 的 `vt_drain` 開關正好派上用場（可建議 4K 使用者關閉 drain，或後續依據需求評估自適應策略）。
+
+#### Q2（出貨形態）：**AGREE（FFmpeg avoption + Lumen `vt_drain` 開關雙層防護）**
+- **100% 同意**。
+- **FFmpeg 側**：在 `videotoolboxenc.c` 增加 avoption（例如 `frame_drain`，int，0=關、1=開，預設 1）。
+- **Lumen 側**：新增 `vt_drain`（`enabled`/`disabled`，預設 `enabled`），在 `video.cpp` 中透過 `av_dict_set_int` 下發。
+- **好處**：Lumen 使用 prebuilt bundle，萬一未來有極端解析度或特殊裝置遇到飽和 stall，使用者或維護者只需要改行 config 就能平滑退回舊行為，無須重新編譯或替換 FFmpeg 二進位檔。
+
+#### Q3（Upstream 提交策略）：**先入 Lumen build-deps recipe，同步向 upstream ffmpeg-devel 發布 RFC/Patch**
+- **第一步（確保 Lumen 出貨）**：將此 patch 納入 Lumen 自己的 `LizardByte/build-deps` recipe，確保 Lumen 的 CI / release 能立刻產出官方正式二進位檔。
+- **第二步（Upstream 貢獻）**：Upstream 的 code review 與合併週期通常需要數週至數月，因此絕不應阻擋 Lumen 發版。但在 `ffmpeg-devel` 提 patch 時，附上這份探針矩陣、棘輪原理與 66.7 ms → 9.0 ms 的實測數據，這將是一份極具說服力且具備完整 upstream 價值的優質貢獻。
+
+**結論**：請回覆用戶並啟動 4K 測試（**PI_4K_FIRST**），測完立刻收割邊界數據！

@@ -70,6 +70,7 @@ static bool g_ffmpeg_pop;  ///< When true, mimic FFmpeg: the callback only enque
 static int g_force_key;  ///< When nonzero, force an IDR every N frames to induce a slow completion.
 static int g_cb_delay_ms;  ///< Delay before the output callback reports its frame, to induce late completions.
 static int g_drain_lag;  ///< Drain up to frame (i - N): bound the queue while still overlapping one encode.
+static int g_drain_every;  ///< When nonzero, drain only once every N frames so the encoder keeps slack.
 static int g_misses;  ///< Pops that found the wrapper queue empty; each one is a permanent frame of latency.
 static int g_popped;  ///< Packets handed out by the FFmpeg-style pop.
 static int g_eof_drained;  ///< Packets still queued when the session was flushed at the end.
@@ -401,6 +402,12 @@ run_trial(const struct trial_config *cfg) {
       }
     }
 
+    if (g_drain_every > 0 && (i % g_drain_every) == 0) {
+      // Drain less often than we submit: the encoder keeps frames in flight between drains, so
+      // the cost of a saturated encoder is spread over several captures instead of stalling all.
+      VTCompressionSessionCompleteFrames(session, CMTimeMake(i, cfg->fps));
+    }
+
     if (g_drain_each) {
       // Drain up to and including this frame, then wait for its completion.
       VTCompressionSessionCompleteFrames(session, CMTimeMake(i, cfg->fps));
@@ -556,6 +563,8 @@ main(int argc, char **argv) {
         delay_count = parse_list(argv[++i], delays, 8);
       } else if (!strcmp(arg, "--inflight") && i + 1 < argc) {
         cap_count = parse_list(argv[++i], caps, 8);
+      } else if (!strcmp(arg, "--drain-every") && i + 1 < argc) {
+        g_drain_every = atoi(argv[++i]);
       } else if (!strcmp(arg, "--drain-lag") && i + 1 < argc) {
         g_drain_lag = atoi(argv[++i]);
       } else if (!strcmp(arg, "--ffmpeg-pop")) {
