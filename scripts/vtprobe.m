@@ -66,6 +66,20 @@ static os_unfair_lock g_lock = OS_UNFAIR_LOCK_INIT;
 static dispatch_semaphore_t g_slot;  ///< Posted when an in-flight slot frees, when capped.
 static dispatch_semaphore_t g_drained;  ///< Posted by every completion so --drain-each can wait.
 static bool g_drain_each;  ///< When true, CompleteFrames is called after each submission.
+static bool g_ffmpeg_pop;  ///< When true, mimic FFmpeg: the callback only enqueues, one non-blocking pop per submission.
+static int g_force_key;  ///< When nonzero, force an IDR every N frames to induce a slow completion.
+static int g_cb_delay_ms;  ///< Delay before the output callback reports its frame, to induce late completions.
+static int g_drain_lag;  ///< Drain up to frame (i - N): bound the queue while still overlapping one encode.
+static int g_misses;  ///< Pops that found the wrapper queue empty; each one is a permanent frame of latency.
+static int g_popped;  ///< Packets handed out by the FFmpeg-style pop.
+static int g_eof_drained;  ///< Packets still queued when the session was flushed at the end.
+
+/// The wrapper queue: frame indices in completion order, mimicking VTEncContext.frame_queue.
+static int q_index[8192];
+static uint64_t q_time[8192];
+static uint64_t q_bytes[8192];
+static int q_head;
+static int q_tail;
 static bool g_late_props;  ///< When true, set the window properties after PrepareToEncodeFrames.
 static bool g_no_attrs;  ///< When true, create the session without source image buffer attributes.
 
@@ -85,6 +99,8 @@ compare_int(const void *a, const void *b) {
   int y = *(const int *) b;
   return x < y ? -1 : (x > y ? 1 : 0);
 }
+
+static void record_index(int index, uint64_t now, uint64_t bytes);
 
 /// Encode output callback: receives the sourceFrameRefCon we passed, which is the frame index.
 static void
@@ -106,8 +122,38 @@ encode_output_cb(void *outputCallbackRefCon, void *sourceFrameRefCon, OSStatus s
     return;
   }
 
+  if (g_cb_delay_ms > 0) {
+    struct timespec nap = { .tv_sec = g_cb_delay_ms / 1000, .tv_nsec = (long) (g_cb_delay_ms % 1000) * 1000000L };
+    nanosleep(&nap, NULL);
+  }
   uint64_t now = mono_ns();
 
+  if (g_ffmpeg_pop) {
+    // FFmpeg's wrapper only appends here; the numbers are taken when a packet is popped.
+    os_unfair_lock_lock(&g_lock);
+    if (q_tail < (int) (sizeof(q_index) / sizeof(q_index[0]))) {
+      q_index[q_tail] = index;
+      q_time[q_tail] = now;
+      q_bytes[q_tail] = sampleBuffer ? (uint64_t) CMBlockBufferGetDataLength(CMSampleBufferGetDataBuffer(sampleBuffer)) : 0;
+      q_tail++;
+    }
+    os_unfair_lock_unlock(&g_lock);
+  } else {
+    uint64_t payload = sampleBuffer ? (uint64_t) CMBlockBufferGetDataLength(CMSampleBufferGetDataBuffer(sampleBuffer)) : 0;
+    record_index(index, now, payload);
+  }
+
+  if (g_slot) {
+    dispatch_semaphore_signal(g_slot);
+  }
+  dispatch_semaphore_signal(g_drained);
+}
+
+/// Record the window depth and the submit to consume latency for one frame.
+/// @param index Frame number being accounted for.
+/// @param now Monotonic host time of the accounting point.
+static void
+record_index(int index, uint64_t now, uint64_t bytes) {
   os_unfair_lock_lock(&g_lock);
   struct results *r = &g_res;
   int window = (int) r->submitted - index;  // Frames submitted but not yet completed for this one.
@@ -123,18 +169,37 @@ encode_output_cb(void *outputCallbackRefCon, void *sourceFrameRefCon, OSStatus s
   if (r->completed < (int) (sizeof(r->lat_us) / sizeof(r->lat_us[0]))) {
     r->lat_us[r->completed] = (int) ((now - g_records[index].submit_ns) / 1000ull);
   }
-  r->bytes += (uint64_t) CMBlockBufferGetDataLength(CMSampleBufferGetDataBuffer(sampleBuffer));
+  r->bytes += bytes;
   if (index < r->last_index) {
     r->out_of_order++;
   }
   r->last_index = index;
   r->completed++;
   os_unfair_lock_unlock(&g_lock);
+}
 
-  if (g_slot) {
-    dispatch_semaphore_signal(g_slot);
+/// Pop at most one queued packet, the way FFmpeg's vtenc_q_pop(wait = 0) does.
+/// @return The frame number handed out, or -1 when the queue was empty.
+static int
+pop_one_nonblocking(void) {
+  int index = -1;
+  os_unfair_lock_lock(&g_lock);
+  if (q_head < q_tail) {
+    index = q_index[q_head++];
+  } else {
+    g_misses++;
   }
-  dispatch_semaphore_signal(g_drained);
+  os_unfair_lock_unlock(&g_lock);
+
+  if (index >= 0) {
+    uint64_t payload;
+    os_unfair_lock_lock(&g_lock);
+    payload = q_bytes[q_head - 1];
+    os_unfair_lock_unlock(&g_lock);
+    g_popped++;
+    record_index(index, mono_ns(), payload);
+  }
+  return index;
 }
 
 /// Set one session property and report the status code returned by this device.
@@ -185,6 +250,9 @@ run_trial(const struct trial_config *cfg) {
   g_fps = cfg->fps;
   g_records = calloc((size_t) cfg->frames, sizeof(struct submit_record));
   memset(&g_res, 0, sizeof(g_res));
+  // Every trial is its own encoder session, so the wrapper queue and its counters start empty.
+  q_head = q_tail = 0;
+  g_misses = g_popped = g_eof_drained = 0;
   g_slot = cfg->inflight_cap > 0 ? dispatch_semaphore_create(cfg->inflight_cap) : NULL;
   g_drained = dispatch_semaphore_create(0);
 
@@ -314,7 +382,16 @@ run_trial(const struct trial_config *cfg) {
     g_res.submitted++;
     os_unfair_lock_unlock(&g_lock);
 
-    status = VTCompressionSessionEncodeFrame(session, pb, CMTimeMake(i, cfg->fps), kCMTimeInvalid, NULL, (void *) (intptr_t) i, NULL);
+    CFMutableDictionaryRef frame_props = NULL;
+    if (g_force_key > 0 && (i % g_force_key) == (g_force_key - 1)) {
+      frame_props = CFDictionaryCreateMutable(NULL, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+      CFDictionarySetValue(frame_props, kVTEncodeFrameOptionKey_ForceKeyFrame, kCFBooleanTrue);
+    }
+
+    status = VTCompressionSessionEncodeFrame(session, pb, CMTimeMake(i, cfg->fps), kCMTimeInvalid, frame_props, (void *) (intptr_t) i, NULL);
+    if (frame_props) {
+      CFRelease(frame_props);
+    }
     if (status != noErr) {
       os_unfair_lock_lock(&g_lock);
       g_res.failed_submits++;
@@ -332,6 +409,18 @@ run_trial(const struct trial_config *cfg) {
       }
     }
 
+    if (g_drain_lag > 0 && i >= g_drain_lag) {
+      // Force the oldest outstanding frame out before popping, but let the newest one stay inside
+      // the encoder so its cost still overlaps the next capture interval.
+      VTCompressionSessionCompleteFrames(session, CMTimeMake(i - g_drain_lag, cfg->fps));
+    }
+
+    if (g_ffmpeg_pop) {
+      // One non-blocking pop per submitted frame, exactly like encode_simple_internal() paired
+      // with vtenc_q_pop(wait = 0): a late completion costs a frame of latency forever.
+      pop_one_nonblocking();
+    }
+
     // Pace submissions to the display cadence, like ScreenCaptureKit would.
     uint64_t deadline = start + (uint64_t) (i + 1) * frame_interval_ns;
     while (mono_ns() < deadline) {
@@ -342,6 +431,13 @@ run_trial(const struct trial_config *cfg) {
 
   uint64_t submit_done = mono_ns();
   VTCompressionSessionCompleteFrames(session, kCMTimeInvalid);
+
+  if (g_ffmpeg_pop) {
+    // Count what FFmpeg would only hand out after the NULL-frame flush.
+    os_unfair_lock_lock(&g_lock);
+    g_eof_drained = q_tail - q_head;
+    os_unfair_lock_unlock(&g_lock);
+  }
 
   // Drain until completions stop arriving.
   int previous = -1;
@@ -375,8 +471,9 @@ run_trial(const struct trial_config *cfg) {
   double avg_lat_ms = n > 0 ? (double) total_lat_ns / (double) n / 1e6 : 0;
   double drain_ms = (double) (mono_ns() - submit_done) / 1e6;
 
-  printf("    result: completed %d/%d (submit %.2f fps, failed %d, dropped %d) | window D min/max = %d/%d | "
+  printf("    result: %spopped %d/%d (misses %d, left in queue at EOF %d) | completed %d/%d (submit %.2f fps, failed %d, dropped %d) | window D min/max = %d/%d | "
          "submit->output avg %.2f ms p50 %.2f p90 %.2f max %.2f | out-of-order %d | %.2f Mbit/s | drain %.0f ms\n",
+    g_ffmpeg_pop ? "ffmpeg-pop: " : "", g_popped, cfg->frames, g_misses, g_eof_drained,
     n, cfg->frames, submit_fps, g_res.failed_submits, g_res.dropped, g_res.min_window, g_res.max_window, avg_lat_ms,
     n > 0 ? lat[n / 2] / 1000.0 : 0.0, n > 0 ? lat[(int) ((double) n * 0.9 < (double) (n - 1) ? (int) ((double) n * 0.9) : n - 1)] / 1000.0 : 0.0,
     n > 0 ? lat[n - 1] / 1000.0 : 0.0, g_res.out_of_order,
@@ -459,6 +556,14 @@ main(int argc, char **argv) {
         delay_count = parse_list(argv[++i], delays, 8);
       } else if (!strcmp(arg, "--inflight") && i + 1 < argc) {
         cap_count = parse_list(argv[++i], caps, 8);
+      } else if (!strcmp(arg, "--drain-lag") && i + 1 < argc) {
+        g_drain_lag = atoi(argv[++i]);
+      } else if (!strcmp(arg, "--ffmpeg-pop")) {
+        g_ffmpeg_pop = true;
+      } else if (!strcmp(arg, "--spike") && i + 1 < argc) {
+        g_force_key = atoi(argv[++i]);
+      } else if (!strcmp(arg, "--cb-delay") && i + 1 < argc) {
+        g_cb_delay_ms = atoi(argv[++i]);
       } else if (!strcmp(arg, "--drain-each")) {
         g_drain_each = true;
       } else if (!strcmp(arg, "--late-props")) {
@@ -472,6 +577,8 @@ main(int argc, char **argv) {
       } else {
         printf("usage: vtprobe [--codec h264|hevc] [--w N] [--h N] [--fps N] [--frames N] [--bitrate N]\n"
                "               [--delay -2,-1,1,0] [--inflight 0,1,2] [--noise] [--tenbit]\n"
+               "[--ffmpeg-pop] [--spike N] [--cb-delay MS] [--drain-each]\n"
+               "  --ffmpeg-pop: mimic FFmpeg (callback only enqueues, one pop per submit)\n"
                "  delay: -2 leave MaxFrameDelayCount unset, -1 unlimited (Apple default), N hold at most N\n");
         return 2;
       }
