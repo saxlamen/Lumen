@@ -7,7 +7,32 @@
 ## FFmpeg, so silently linking the published dependency archive would undo it. Set
 ## LUMEN_FFMPEG_BUNDLE to a bundle directory, or to "auto" to build one, see
 ## third-party/ffmpeg-patches/README.md.
+##
+## @par Usage
+## `./build.sh [--no-bump|-n] [--help|-h]`. By default each run increments the patch part of
+## LUMEN_VERSION and writes it back, which is what a deployed build should do. `--no-bump` builds at
+## the version already recorded without touching the file, so experiment and measurement builds stay
+## in step with what is committed. Environment knobs: BUILD_DIR, LUMEN_FFMPEG_BUNDLE,
+## APPLE_CODESIGN_IDENTITY.
 set -euo pipefail
+
+version_bump=true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n | --no-bump)
+      version_bump=false
+      ;;
+    -h | --help)
+      sed -n '2,16p' "$0" | sed 's/^## \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1 (try --help)" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-cmake-build-macos}"
@@ -90,7 +115,9 @@ fi
 LUMEN_VERSION_FILE="$REPO_DIR/LUMEN_VERSION"
 if [[ -f "$LUMEN_VERSION_FILE" ]]; then
   CURRENT_LUMEN_VER="$(tr -d '[:space:]' < "$LUMEN_VERSION_FILE")"
-  if [[ "$CURRENT_LUMEN_VER" == "0.9.9" ]]; then
+  if [[ "$version_bump" == false && "$CURRENT_LUMEN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    NEXT_LUMEN_VER="$CURRENT_LUMEN_VER"
+  elif [[ "$CURRENT_LUMEN_VER" == "0.9.9" ]]; then
     NEXT_LUMEN_VER="1.0.0"
   elif [[ "$CURRENT_LUMEN_VER" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
     NEXT_LUMEN_VER="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
@@ -160,5 +187,9 @@ if ! brew services start lumen; then
     launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
   fi
 fi
-echo "$NEXT_LUMEN_VER" > "$LUMEN_VERSION_FILE"
+if [[ "$version_bump" == true ]]; then
+  echo "$NEXT_LUMEN_VER" > "$LUMEN_VERSION_FILE"
+else
+  echo "==> LUMEN_VERSION left at $NEXT_LUMEN_VER, not incremented."
+fi
 echo "==> Done (Lumen $NEXT_LUMEN_VER)."
