@@ -1579,3 +1579,38 @@ min_threads = 8             # slices = max(client, 8) -> x264 slice 平行度 8
 - 要 7 ms 級 host latency：`encoder = software` + `sw_tune = zerolatency`，再用 `sw_preset`/`min_threads` 在品質與平行度之間調；代價是 **H.264 only（無 HEVC/10-bit/HDR）**。
 - 要 HEVC/HDR：只能留在 VideoToolbox，host latency = `D/60`（實測 50–67 ms），除非給 FFmpeg 打 `MaxFrameDelayCount` patch。
 請你 [Round 43] 確認這個定稿措辞，以及第三場的判準。
+
+---
+
+## [Round 43] Pi-Bolt — 2026-10-31 13:3x — 用戶問「GPU 真的避不開 extra delay 嗎、能不能自己寫中間層、網路上有沒有人討論」：查完回報，答案是「不是避不開，但在 FFmpeg 裡面避不開」，而且已經有人把它做到 38 ms
+
+### 1. 為什麼透過 FFmpeg 無解（我逐檔查證）
+- FFmpeg master 的 VideoToolbox **編碼器**是 `libavcodec/videotoolboxenc.c`（3037 行，注意檔名沒有底線，`videotoolbox.c` 是解碼器）。我抓下來統計它設了哪些 VT property：
+  `RealTime`、`EnableLowLatencyRateControl`、`PrioritizeEncodingSpeedOverQuality`、`AllowFrameReordering`、`AllowOpenGOP`、`MaximizePowerEfficiency`、`Min/MaxAllowedFrameQP`、`ReferenceBufferCount`、`ConstantBitRate`、`EncoderID`、`SpatialAdaptiveQPLevel`。
+  **`kVTCompressionPropertyKey_MaxFrameDelayCount` 出現 0 次**，`SuggestedLookAheadFrameCount`、`ExpectedFrameRate` 也是 0 次。FFmpeg Trac 全站搜尋 `MaxFrameDelayCount` 也是 0 hits。
+- Apple 的 `VTCompressionProperties.h` 明寫該 property 預設是 `kVTUnlimitedFrameDelayCount` ⇒ **那個 unlimited 就是我们实測 `D = 3–4` 的来源**。LOW_DELAY 只換成 low-latency rate control，不会把 window 收起來（這跟我們乾淨 A/B 的 `D` 不变完全一致）。
+- 我們部署的舊版 FFmpeg 更少：`strings libavcodec.a` 有 `EnableLowLatencyRateControl`/`RealTime`，但 `MaxFrameDelayCount`、`AllowFrameReordering`、`ExpectedFrameRate` 都是 0。
+- 另有一個必須先实测的理由：我們自己的 log 出現 29 次 `PrioritizeEncodingSpeedOverQuality property is not supported on this device. Ignoring` ⇒ **這台 M5 Ultra 會拒絕某些 property**（`kVTPropertyNotSupportedErr = -12900`），所以 `MaxFrameDelayCount` 能不能吃必须自己试。
+
+### 2. 網路上的前人工作（我直接抓了內容）
+1. **`stormlantern-dev/aetherdesk` PR #17（merged）：「Cut latency from ~150 to ~38 ms: measure per stage, stop queueing in the encoder」** — 跟我們幾乎同一個問題（macOS 畫面串流）。
+   - 他们的诊断：3456×2234 下編碼器只吃下 60 fps 裡的 ~52 帧，帧在 encoder 前面排队，encode 階段 140–145 ms 佔總延遲 ~152 ms 的絕大部分，網路/解码/顯示合計 <10 ms。
+   - 他们的修法：**最多 N 帧 in-flight（預設 1）進 VideoToolbox，期滿時丢舊留新**；加 **`MaxFrameDelayCount=0`** 與 `PrioritizeEncodingSpeedOverQuality`（「where the encoder supports them」）。
+   - 结果：總延遲 **~38 ms @ ~44 fps（1 in-flight）**、**~54 ms @ ~52 fps（2 in-flight）**，而且他們註明 **「one felt better」= 2 個 in-flight 手感比较好**。
+   - 這跟我們今天的抖動結論同方向：in-flight 越少延遲越低，但 1 的體感可能不如 2。
+2. **`callstackincubator/simlock` #1090**：同一個诉求——要 `kVTCompressionPropertyKey_MaxFrameDelayCount = 0`，並在每次 encode 之後呼叫 `VTCompressionSessionCompleteFrames`（他們是 iOS 螢幕串流，软編碼没帧的 case）。
+3. 既有引用（已在文件）：LizardByte/Sunshine `#5441`（martona：ffmpeg+VT 有 ~120 ms 固有延遲，改 `encoder = software`）、`#5814`/`#5977`（LOW_DELAY 的副作用）、`oujinhaoai/Sunshine` PR #1（清 LOW_DELAY）。
+4. FFmpeg 端沒有人提這個 ticket（Trac 0 hits）⇒ 這是 upstream 的缺口，不是我們沒找到開關。
+
+### 3. 「自己寫中間層」的三條路與成本
+- **A. 打 patch 給 FFmpeg 的 `videotoolboxenc.c`**：在 properties 設定處加 `MaxFrameDelayCount`（並開一個 avoption，讓 Lumen 用 `av_dict_set` 傳）。程式最小，但我們現在用 prebuilt 靜態 FFmpeg ⇒ 要自己編 FFmpeg 並長期維護。
+- **B. Lumen 內建原生 VT 編碼模組**（ObjC++ `VTCompressionSessionCreate` + IOSurface 零拷貝進、annexed NAL 出）：可同時實作 in-flight 上限，而且 `VTCompressionSessionEncodeFrame` 的 `sourceFrameRefCon` 直接把 capture 時間戳带回来 ⇒ **我們的 `in_flight_frame_tracker_t` 可以整個拿掉**。粗估 500–700 行 ObjC++，外加整合 encoder 註冊/probing/cbs 參數集注入/10-bit、HDR、4:4:4 的取捨。
+- **C. 就用 `encoder = software`**（今天實測 host latency 7 ms，D=0）：代價是 H.264 8-bit only（無 HEVC/HDR）與尾延遲抖動風險。
+
+### 4. 我的建議：先做一支「可行性探針」，別先改 Lumen/FFmpeg
+寫一個不依賴 Lumen 與 FFmpeg 的獨立小程式（Swift 或 ObjC，我用 swiftc 直接編）：
+1. 建 `VTCompressionSession`（先 hevc、再 h264），`EnableHardwareAcceleratedVideoEncoder` + `EnableLowLatencyRateControl`，解析度就用 2560×1920@60；
+2. 記錄每個 property 的 `VTSessionSetProperty` 回傳碼（特别看 `MaxFrameDelayCount = 0/1` 是否 `-12900`）；
+3. 餵 N 張 IOSurface 帧（用真實內容的隨機 noise），量「`EncodeFrame` → output callback」的帧数差與 ms 分布（就是我們的 `D` 的另一個量法）；
+4. 输出：`D`、每秒完成帧数、`MaxFrameDelayCount` 有没用、以及要不要 `VTCompressionSessionCompleteFrames`。
+這樣 A/B 兩條路要花的錢就先知道了。請你 [Round 44] 表態：探針優先对不对？如果探針显示 `MaxFrameDelayCount` 在这台可用，你倾向走 A（patch FFmpeg）還是 B（原生 VT 模組）？
