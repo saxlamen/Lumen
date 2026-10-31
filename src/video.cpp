@@ -1860,6 +1860,15 @@ namespace video {
     // attributed to the frame that actually produced it.
     session.frame_tracker.record_submitted_frame(frame_nr, frame_timestamp, (frame->flags & AV_FRAME_FLAG_KEY) != 0);
 
+    // The frame based statistics below cannot be converted to milliseconds without knowing how fast
+    // this loop really feeds the encoder, which is not the same as the refresh rate advertised to
+    // the client when the encoder serializes submits.
+    static logging::min_max_avg_periodic_logger<double> encode_rate_logger {debug, "Video: encode rate"sv, " fps"sv};
+    static detail::encode_rate_meter_t encode_rate_meter;
+    if (auto rate = encode_rate_meter.record(std::chrono::steady_clock::now(), true)) {
+      encode_rate_logger.collect_and_log(*rate);
+    }
+
     while (ret >= 0) {
       auto packet = std::make_unique<packet_raw_avcodec>();
       auto av_packet = packet.get()->av_packet;

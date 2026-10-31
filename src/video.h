@@ -821,6 +821,52 @@ namespace video {
     }
 
     /**
+     * @brief Measures how many frames the encode loop actually submits per second.
+     *
+     * The refresh rate advertised to the client and the rate measured here differ when the encoder
+     * serializes submits, which is why frame based latency statistics cannot be converted to
+     * milliseconds without this value.
+     *
+     * A single encoder thread calls this once per pass of the encode loop, so it is not synchronized.
+     */
+    struct encode_rate_meter_t {
+      /**
+       * @brief Account for one pass through the encode loop.
+       *
+       * @param now Timestamp of this pass.
+       * @param submitted True when a frame was handed to the encoder on this pass.
+       * @return The submit rate of the finished window, or std::nullopt while the window is still open.
+       */
+      std::optional<double> record(std::chrono::steady_clock::time_point now, bool submitted) {
+        if (window_start == std::chrono::steady_clock::time_point {}) {
+          window_start = now;
+          return std::nullopt;
+        }
+
+        if (submitted) {
+          ++window_frames;
+        }
+
+        auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now - window_start);
+        if (elapsed < window) {
+          return std::nullopt;
+        }
+
+        auto seconds = std::chrono::duration<double> {elapsed}.count();
+        auto rate = seconds > 0.0 ? static_cast<double>(window_frames) / seconds : 0.0;
+
+        window_start = now;
+        window_frames = 0;
+        return rate;
+      }
+
+      std::chrono::seconds window {20};  ///< Length of one measurement window.
+
+      std::chrono::steady_clock::time_point window_start {};  ///< Start of the current window, unset before the first call.
+      uint64_t window_frames = 0;  ///< Frames counted in the current window.
+    };
+
+    /**
      * @brief Per-frame metadata for frames that are still inside an asynchronous encoder.
      *
      * Encoders such as VideoToolbox hold several frames in flight, so the packet returned by

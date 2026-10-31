@@ -589,3 +589,39 @@ TEST(EncodeFlagsTest, OtherEncodersIgnoreTheOption) {
   EXPECT_EQ(video::detail::encode_flags_for_encoder(false, true), AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY);
 }
 
+/**
+ * @brief The rate meter reports nothing until its window closes.
+ */
+TEST(EncodeRateMeterTest, SilentUntilWindowCloses) {
+  video::detail::encode_rate_meter_t meter;
+  const auto start = std::chrono::steady_clock::time_point {std::chrono::seconds {100}};
+
+  EXPECT_FALSE(meter.record(start, true).has_value());
+  EXPECT_FALSE(meter.record(start + 10s, true).has_value());
+  EXPECT_FALSE(meter.record(start + meter.window - 1ms, true).has_value());
+}
+
+/**
+ * @brief A closed window reports the submitted frame rate and restarts counting.
+ */
+TEST(EncodeRateMeterTest, ReportsRateAndRestarts) {
+  video::detail::encode_rate_meter_t meter;
+  const auto start = std::chrono::steady_clock::time_point {std::chrono::seconds {100}};
+
+  // 199 counted passes plus the closing pass, all inside a 20 s window. The first call only
+  // establishes the window, so 200 frames in 20 s is 10 fps.
+  meter.record(start, true);
+  for (int i = 1; i < 200; ++i) {
+    EXPECT_FALSE(meter.record(start + std::chrono::milliseconds {100 * i}, true).has_value());
+  }
+
+  auto rate = meter.record(start + meter.window, true);
+  ASSERT_TRUE(rate.has_value());
+  EXPECT_DOUBLE_EQ(*rate, 10.0);
+
+  // The next window counts from scratch, so an idle window reports zero frames per second.
+  EXPECT_FALSE(meter.record(start + meter.window + 1s, false).has_value());
+  auto idle = meter.record(start + 2 * meter.window, false);
+  ASSERT_TRUE(idle.has_value());
+  EXPECT_DOUBLE_EQ(*idle, 0.0);
+}
