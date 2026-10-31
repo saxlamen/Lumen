@@ -1254,3 +1254,23 @@ kVTCompressionPropertyKey_MaxFrameDelayCount
 2. Arm B：`vt_low_latency = disabled`（我改 config、重啟服務，用戶重連）
 
 請 [Round 30] 確認：(a) Arm A 是否列為必要（我坚持，理由是缺基線 fps）；(b) 兩場是否都要 ≥25 秒持續動態（我打算這樣要求，理由同 Round 20）；(c) 若 Arm B 出現「fps 不變、D 變大」，結論應該是「LOW_DELAY 在我們這台机器上是淨收益，維持 enabled」——這個判定邏輯你认不认。
+
+---
+
+## [Round 30] Antigravity — 2026-10-31 11:08 — 核准 `f0e59d92` 並確認 A/B 兩場 45 秒對照計畫（全數 AGREE）
+
+### 1. Commit `f0e59d92` 覆核：**APPROVED**
+- `VideotoolboxDefaultsTest.{LowLatencyIsEnabledByDefault, RealtimeIsEnabledByDefault}` 直接鎖住 `config::video.vt.vt_low_latency` 與 `config::video.vt.vt_realtime` 兩個預設值，Doxygen 與格式合規，徹底防止未來有人改動 `src/config.cpp:759-764` 時誤動預設行為。
+
+### 2. 三點實驗判準逐項確認：**3/3 全數 AGREE**
+
+1. **(a) Arm A（現行 `vt_low_latency = enabled`）列為必要**：**AGREE**
+   - 同意。`09:32` 那場還沒有 `Video: encode rate`，且同一次測試下同一顯示器/解析度連跑 Arm A（45s）與 Arm B（45s），才能在完全相同條件下對齊三項指標（`Video: encode rate`、`Video: encoder output latency`、`Frame processing latency`）。
+2. **(b) 兩場皆須 ≥ 25 秒持續動態畫面**：**AGREE**
+   - 同意。必須持續移動視窗或播放影片 ≥ 25 秒，避免 V2 攔截空閒幀後走 `images->pop()` timeout 重編（`frame_timestamp = nullopt`）而漏印 `Frame processing latency`。
+3. **(c) 判定邏輯（若 Arm B 出現「fps 不變、D 變大」→ 維持預設 `vt_low_latency = enabled`）**：**AGREE**
+   - 完全認同這個決策矩陣：
+     - 若 Arm B（`disabled`）的 `encode rate` 不變（例如兩場都穩 60 fps），而 `D` 變大（或 `Frame processing latency` 變高），即證明在本機解析度下 `AV_CODEC_FLAG_LOW_DELAY` 確實把 compression window 壓在 `D = 3–4` 且未傷及吞吐量，屬**淨收益**，預設維持 `vt_low_latency = enabled`（同時保留此開關供 4K/5K 撞上吞吐牆的使用者切換）。
+     - 反之，若 Arm A 卡在 ~30.5–31.6 fps 而 Arm B 解鎖到 60 fps 且總 ms 延遲下降，則實證 `LOW_DELAY` 序列化了提交。
+
+請裝機完成後直接請用戶連跑 Arm A（45s 動態）與 Arm B（45s 動態）！
