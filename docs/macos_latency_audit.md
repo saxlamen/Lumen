@@ -244,6 +244,7 @@ Fixed on `main` of this fork:
 |---|---|---|
 | Capture callback race, sample-buffer lifetime, dummy-frame format, `nv12_zero_device` lifetime | `ae2cd04b` | Also raised `SCStreamConfiguration.queueDepth` from 5 to 16 for buffer lifetime, not throughput. |
 | N1 missing `frame_timestamp` | `5954394f` | `frame_processing_latency` sent to the client and the RTP clock now use real capture time instead of rate-control pacing. |
+| N1 follow-up: packets attributed to the wrong frame | `f2638e39` | VideoToolbox keeps frames in flight, so capture timestamps and IDR requests are now resolved from `AVPacket::pts`. This also removed the `Encoder did not produce IDR frame when requested!` false alarms. |
 | N3 + A4 audio semaphore | `b53ab893` | Signal only when the consumer is parking; wait timeout 5s → 200ms; timeout silence is now submitted instead of discarded. |
 | A3 unconverted audio on conversion failure | `3e3b6cf6` | Replaced with silence in the client's channel layout, counted and reported off the IOProc. |
 | V3 capture queue QoS | `81c736a9` | `QOS_CLASS_USER_INTERACTIVE`, with the queueing delay now measured. |
@@ -252,7 +253,26 @@ Fixed on `main` of this fork:
 | V2 idle re-delivery | this pass | ScreenCaptureKit status deliveries with no image are skipped and counted. |
 | N2 unconditional pixel-buffer lock | this pass | `requires_cpu_copy()` plus a lazy lock; measured offline in `tests/unit/platform/macos/test_pixel_buffer_lock.cpp`. |
 
-Not changed, with the reasons below: I1, I2, I4, I5, I6, I7.
+Not changed, with the reasons below: I1, I2, I4, I5, I6, I7. Open performance work: V6.
+
+### V6 (open, P3) — VideoToolbox keeps three to four frames in flight
+
+Called **V4** in `docs/macos_latency_audit_thread.md`; numbered V6 here because V4 and V5 are already taken in this document.
+
+**Measured, not inferred.** `Video: encoder output latency` (added in `f2638e39`) reports `frame_nr - AVPacket::pts` as a 20 s min/max/average:
+
+```text
+Debug: Video: encoder output latency (min/max/avg): 4.00 frames/4.00 frames/4.00 frames
+Debug: Frame processing latency (min/max/avg): 48.80ms/106.50ms/81.95ms
+```
+
+A depth of four frames is 66.7 ms at 60 fps and 33 ms at 120 fps, and it is therefore the floor of `Frame processing latency`. A measured session averaged 82–92 ms, so everything outside the encoder accounts for roughly 15–25 ms of host latency. The depth starts at 0–1 and settles at 3–4 once the encoder is warm.
+
+**Already ruled out:** B-frames (`ctx->max_b_frames = 0`, `src/video.cpp:2086`) and the VideoToolbox realtime mode (`vt_realtime`, default enabled, `src/video.cpp:1394`, `1411`, `1433`).
+
+**Proposed mechanism** (from disassembly of the deployed binary, see thread Round 22): the FFmpeg VideoToolbox wrapper pops at most one packet per `avcodec_receive_packet()` call, and the encode loop submits back-to-back whenever an IDR was requested and the image queue is empty (`src/video.cpp:2508`), so a few `AVERROR(EAGAIN)` rounds leave three or four already-encoded packets queued inside the wrapper. That is a ratchet, not a policy.
+
+**First experiment if this is picked up:** limit the zero-delay burst on IDR requests, or drain the wrapper queue after submitting, and read `Video: encoder output latency` to see whether the depth falls to one. Untested alternatives are `AllowTemporalRedundancy`, `AllowFrameReordering`, `multi_pass` and `bitrate_mode` passed as encoder options. This is P3 because the delay is inside the encoder rather than introduced by this fork, and because those properties also affect bitrate and image quality.
 
 ### I2 (open) — per-event WindowServer position query and cursor warp
 
