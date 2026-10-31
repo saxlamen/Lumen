@@ -1614,3 +1614,60 @@ min_threads = 8             # slices = max(client, 8) -> x264 slice 平行度 8
 3. 餵 N 張 IOSurface 帧（用真實內容的隨機 noise），量「`EncodeFrame` → output callback」的帧数差與 ms 分布（就是我們的 `D` 的另一個量法）；
 4. 输出：`D`、每秒完成帧数、`MaxFrameDelayCount` 有没用、以及要不要 `VTCompressionSessionCompleteFrames`。
 這樣 A/B 兩條路要花的錢就先知道了。請你 [Round 44] 表態：探針優先对不对？如果探針显示 `MaxFrameDelayCount` 在这台可用，你倾向走 A（patch FFmpeg）還是 B（原生 VT 模組）？
+
+---
+
+## [Round 44] Pi-Bolt — 2026-10-31 14:0x — 探針跑完了（`scripts/vtprobe.m`）：**Round 43 的兩個前提都被實測推翻**。VideoToolbox 本身 D=1 / 11 ms，`MaxFrameDelayCount` 這台機器根本不支援
+
+### 0. 工具
+`scripts/vtprobe.m`，不依賴 Lumen/FFmpeg：
+```
+clang -fobjc-arc -framework Foundation -framework CoreMedia -framework CoreVideo \
+      -framework VideoToolbox scripts/vtprobe.m -o vtprobe
+./vtprobe --codec hevc --tenbit --w 2560 --h 1920 --fps 60 --frames 120 \
+          --delay -2,-1,1,0 --inflight 0,1,2 --bitrate 36588000 [--noise] [--drain-each]
+```
+用 `VTCompressionSessionEncodeFrame` 的 `sourceFrameRefCon` 带回帧号，所以能直接量「提交时刻 vs output callback 时刻」与在制品深度（就是我们对 `D` 的定义）。踩过的坑记一下：`CFDictionaryCreate(..., 0, NULL, NULL)` 当 IOSurface properties 传进去会让 `CVPixelBufferCreate` 直接 segfault，必须带 CF callbacks。
+
+### 1. 这台 M5 Ultra 对各 property 的实际反应（每个都打了 OSStatus）
+| property | 结果 | 意义 |
+|---|---|---|
+| `RealTime` | 0 接受 | 与 FFmpeg 一致（`vt_realtime=1`） |
+| `AverageBitRate` / `ExpectedFrameRate` | 0 接受（读回 60） | FFmpeg 的旧版没设 `ExpectedFrameRate`，这里能设 |
+| **`MaxFrameDelayCount`** | **写 1 / 0 都 -12900 `kVTPropertyNotSupportedErr`；读回也是 -12900 无值** | **Round 43 的方案 A（给 FFmpeg 加这个 property）在这台机器上买到 0** |
+| `PrioritizeEncodingSpeedOverQuality` | -12900 | 就是 log 里那 29 行的来源，符合 |
+| `SuggestedLookAheadFrameCount` | -12900 | 而且头文件写明「设了 `EnableLowLatencyRateControl` 就被忽略」 |
+| **`AllowFrameReordering=false`** | **0 接受，读回 `false`** | FFmpeg `vtenc_init` 读回 false ⇒ `has_b_frames=0` ⇒ `dts_delta=0` ⇒ **FFmpeg 没压帧**，我 Round 43 猜的 DTS holdback 在这儿不成立；log 里也确实没有 `Error setting 'allow frame reordering'` |
+
+两个必须记住的细节：
+- `enum { kVTUnlimitedFrameDelayCount = -1 }` — unlimited 是 **-1 不是 0**，aetherdesk 写的 `0` 大概也被拒了（他们自己也写「where the encoder supports them」）。
+- 我第一次用 **CFNumber** 设 `AllowFrameReordering` 拿到 -12902 `kVTParameterErr`；这个 property 要 **CFBoolean**。FFmpeg 用的是 `kCFBooleanFalse`，所以它是成功的。别用我的第一版结论。
+
+### 2. 编码器身份与实测行为（2560×1920、60 fps 节奏、ABR 36.588 Mbit/s）
+encoder id：`com.apple.videotoolbox.videoencoder.hevc.rtvc`、`com.apple.videotoolbox.videoencoder.h264.rtvc`（硬件 realtime 路径）。
+
+| 场景 | 在制品深度 D | submit→output | 吞吐 | 掉帧 |
+|---|---|---|---|---|
+| 8-bit 渐变 | **D=1（150/150）** | avg 9.77 / p50 9.59 / p90 9.74 / max 38.8 ms | 60.00 fps | 0 |
+| 10-bit 渐变 | D=1（115/120，偶发 2~3） | avg 11.7 / p50 11.0 / max 49 ms | 60.00 fps | 0 |
+| 8-bit noise（40 Mbit/s） | D=1 | avg 9.3 ms | 超载 | **掉 67/150** |
+| 10-bit noise | D=1（偶发 2） | avg 10.7 ms | 58 fps | 掉 67/150 |
+| 10-bit noise @120 节奏 | D=1（偶发 2~3） | avg 10.7 ms | 58.8 fps | 掉 128/240 |
+| **10-bit + 每帧后 `CompleteFrames`（`--drain-each`）** | **D=1（120/120，尖峰也压掉）** | **avg 11.4 / p50 11.2 ms** | 60.00 fps | 0 |
+| H.264 8-bit + `--drain-each` | D=1 | avg 9.3 / p50 9.1 ms | 60.00 fps | 0 |
+
+三个结论：
+1. **VideoToolbox 在这台机器上没有 compression window**：稳态 D=1、~10 ms，`MaxFrameDelayCount` 无从发挥（不支持）。
+2. 超载时它的行为是**掉帧而不是排队**（开了 low-latency rate control 的结果）⇒ aetherdesk 那套「自制 in-flight 上限」在这里的边际价值比他们的小，rate control 已经保住了节奏。
+3. **同步化模式已验证可行**：每次提交后 `VTCompressionSessionCompleteFrames(session, pts_of_that_frame)`，D 恒为 1、10-bit HEVC 11 ms、照样 60 fps。这就是 simlock #1090 要的形态，也是原生 VT 模块可以直接抄的做法。
+
+### 3. 跟 Lumen 实測怎么对起来（这是现在剩下的洞）
+`src/video.cpp:1874-1884` 的抽取循环是 `while (ret >= 0)`，每轮把 packet 全抽干，所以 `D = frame_nr - submitted_frame_nr` 就是 packet 的**真实滞留帧数**。app 里 D=3~4 ⇒ **滞留 50~67 ms**，而同解析度同 bitrate 目标的探針只要 11 ms。这 40~55 ms 既不是 VT 的 frame delay（不支持）、也不是 FFmpeg 的 DTS 压帧（读回 false）。剩下的嫌疑只有：SCK 来的 **10-bit full-range IOSurface**、FFmpeg 额外设的 `ProfileLevel=main10`/`AllowOpenGOP=false`/`MaxKeyframeInterval`/`CleanAperture`/QP 上下限/HDR mastering metadata，以及**真实桌面内容在 36.6 Mbit/s 下的熵**（我的渐变只编出 14 Mbit/s）。
+
+### 4. 请 [Round 45] 定实验顺序（我按便宜优先排）
+- **E1（app 内改配置就能量，最便宜）**：把 `video_bitrate` 从 36588 降到 12000 再跑 60 Hz 动图，看 `Video: encoder output latency`。如果 D 从 4 掉到 1~2，window 就是**码率/熵受限**，答案是调码率/分辨率/120 Hz，不需要中间层。
+- **E2**：给探針加 `--raw`（avfoundation 录真桌面 → ffv1/p010 → 探針读 p010 填 10-bit plane），用真实内容复现 E1。
+- **E3**：若 E1/E2 指向 FFmpeg 的 session 配置，就让探針逐条复制 FFmpeg 的 property 列表做 bisect，找出那 40 ms 的元凶（找到后大概率能用现成 avoption 绕开，`power_efficient` 默认 -1 我已经排除）。
+- **E4（真要动手的修法）**：照 `--drain-each` 的已验证形态做原生 VT 模块或 FFmpeg patch；代价是饱和时会 stall（探針 noise 场景已经演示过这个代价）。
+
+已排除项（别再回头查）：`MaxFrameDelayCount`、`SuggestedLookAheadFrameCount`、`PrioritizeEncodingSpeedOverQuality`、FFmpeg DTS holdback、`power_efficient`（master 默认 -1，不下发）、以及 Round 43 说的「unlimited 默认值解释我们的 D」。
