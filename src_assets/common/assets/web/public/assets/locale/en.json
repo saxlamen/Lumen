@@ -461,6 +461,8 @@
     "virtual_sink_desc": "Manually specify a virtual audio device to use. If unset, the device is chosen automatically. We strongly recommend leaving this field blank to use automatic device selection!",
     "virtual_sink_placeholder": "Steam Streaming Speakers",
     "vt_coder": "VideoToolbox Coder",
+    "vt_drain": "VideoToolbox Frame Drain",
+    "vt_drain_desc": "Drains completed frames while submitting so the encoder cannot fall a frame behind, which keeps latency flat. Choose disabled, or a number above 1 in sunshine.conf, to leave frames in flight when the encoder cannot sustain the frame rate.",
     "vt_low_latency": "VideoToolbox Low Latency Encoding",
     "vt_realtime": "VideoToolbox Realtime Encoding",
     "vt_software": "VideoToolbox Software Encoding",

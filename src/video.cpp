@@ -1396,6 +1396,7 @@ namespace video {
         {"require_sw"s, &config::video.vt.vt_require_sw},
         {"realtime"s, &config::video.vt.vt_realtime},
         {"prio_speed"s, 1},
+        {"frame_drain"s, &config::video.vt.vt_drain},
         {"max_ref_frames"s, 1},
       },
       {},  // SDR-specific options
@@ -1413,6 +1414,7 @@ namespace video {
         {"require_sw"s, &config::video.vt.vt_require_sw},
         {"realtime"s, &config::video.vt.vt_realtime},
         {"prio_speed"s, 1},
+        {"frame_drain"s, &config::video.vt.vt_drain},
         {"max_ref_frames"s, 1},
       },
       {},  // SDR-specific options
@@ -1435,6 +1437,7 @@ namespace video {
         {"require_sw"s, &config::video.vt.vt_require_sw},
         {"realtime"s, &config::video.vt.vt_realtime},
         {"prio_speed"s, 1},
+        {"frame_drain"s, &config::video.vt.vt_drain},
       },
       {},  // SDR-specific options
       {},  // HDR-specific options

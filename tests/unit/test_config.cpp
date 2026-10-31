@@ -124,3 +124,72 @@ TEST_F(ConfigPersistenceTest, SelectsAllDriversOnlyForLicensedUsersWithoutAPrefe
   EXPECT_FALSE(config::select_all_gamepad_drivers_if_licensed(true));
   EXPECT_EQ(file_handler::read_file(config_file().string().c_str()), "gamepad_driver = all\n");
 }
+
+/**
+ * @brief The words and numbers accepted by vt_drain map to a drain cadence.
+ */
+TEST(VideotoolboxDrainTest, MapsWordsAndNumbersToACadence) {
+  EXPECT_EQ(0, config::vt::drain_from_view("disabled"));
+  EXPECT_EQ(0, config::vt::drain_from_view("off"));
+  EXPECT_EQ(0, config::vt::drain_from_view("0"));
+
+  EXPECT_EQ(1, config::vt::drain_from_view("enabled"));
+  EXPECT_EQ(1, config::vt::drain_from_view("on"));
+
+  EXPECT_EQ(2, config::vt::drain_from_view("2"));
+  EXPECT_EQ(16, config::vt::drain_from_view("16"));
+}
+
+/**
+ * @brief Anything that is neither a keyword nor a plain decimal keeps the synchronous default.
+ */
+TEST(VideotoolboxDrainTest, FallsBackToSynchronousDrain) {
+  EXPECT_EQ(1, config::vt::drain_from_view(""));
+  EXPECT_EQ(1, config::vt::drain_from_view("maybe"));
+  EXPECT_EQ(1, config::vt::drain_from_view("2x"));
+  EXPECT_EQ(1, config::vt::drain_from_view("-1"));
+}
+
+/**
+ * @brief Cadences beyond the useful range clamp instead of overflowing the accumulator.
+ */
+TEST(VideotoolboxDrainTest, ClampsVeryLargeCadences) {
+  EXPECT_EQ(16, config::vt::drain_from_view("17"));
+  EXPECT_EQ(16, config::vt::drain_from_view("999999999999999999999"));
+}
+
+using VideotoolboxDrainConfigParam = std::pair<std::string_view, int>;  ///< Configuration text and the cadence it must produce.
+
+/**
+ * @brief Coverage for the `vt_drain` option as it is read from sunshine.conf.
+ */
+struct VideotoolboxDrainConfigTest: testing::TestWithParam<VideotoolboxDrainConfigParam> {
+  /**
+   * @brief Restore the encoder configuration that was captured before the test body ran.
+   */
+  void TearDown() override {
+    config::video = original_video;
+    config::modified_config_settings = original_modified_config_settings;
+  }
+
+  config::video_t original_video {config::video};  ///< Encoder configuration restored after each parameterized test.
+  decltype(config::modified_config_settings) original_modified_config_settings {config::modified_config_settings};  ///< Change tracking restored after each test.
+};
+
+TEST_P(VideotoolboxDrainConfigTest, AppliesTheConfiguredCadence) {
+  const auto &[setting, expected] = GetParam();
+  config::apply_config_for_test(setting);
+
+  EXPECT_EQ(expected, config::video.vt.vt_drain);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  VideotoolboxDrainValues,
+  VideotoolboxDrainConfigTest,
+  testing::Values(
+    VideotoolboxDrainConfigParam {"vt_drain = enabled\n"sv, 1},
+    VideotoolboxDrainConfigParam {"vt_drain = disabled\n"sv, 0},
+    VideotoolboxDrainConfigParam {"vt_drain = 2\n"sv, 2},
+    VideotoolboxDrainConfigParam {"vt_drain = 99\n"sv, 16}
+  )
+);

@@ -27,6 +27,17 @@ namespace config {
     std::string ffmpeg_preset_from_quality(int quality_preset);
   }  // namespace nv
 
+  namespace vt {
+    /**
+     * @brief Parse the VideoToolbox frame-drain cadence from configuration text.
+     *
+     * @param drain Cadence text: `disabled`/`off`/`0` to leave the encoder asynchronous, `enabled`/`on` to
+     * drain on every submission, or a decimal number to drain once every N submissions.
+     * @return Cadence in the range 0 through 16, where 1 means the encoder behaves synchronously.
+     */
+    int drain_from_view(const std::string_view &drain);
+  }  // namespace vt
+
   // Valid range for the packetsize limit
   constexpr int PACKETSIZE_MIN = 200;  ///< Lowest accepted configured packet size in bytes.
   constexpr int PACKETSIZE_MAX = 65535;  ///< Highest accepted configured packet size in bytes.
@@ -120,6 +131,7 @@ namespace config {
       int vt_coder;  ///< VideoToolbox entropy-coding mode.
 
       int vt_low_latency {1};  ///< Whether VideoToolbox sessions request low-delay (low-latency rate control) encoding.
+      int vt_drain {1};  ///< Drain completed VideoToolbox frames every N submissions; 0 leaves the encoder asynchronous.
     } vt;  ///< VideoToolbox encoder options.
 
     struct {

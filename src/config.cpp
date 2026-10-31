@@ -564,6 +564,39 @@ namespace config {
       return 1;
     }
 
+    int drain_from_view(const std::string_view &drain) {
+      if (drain == "disabled" || drain == "off" || drain == "0") {
+        return 0;
+      }
+
+      if (drain == "enabled" || drain == "on") {
+        return 1;
+      }
+
+      // A plain decimal cadence lets advanced users trade latency for throughput. Anything else,
+      // including an empty value, falls back to the synchronous behaviour that is the default.
+      int cadence {};
+      std::size_t digits {};
+      for (; digits < drain.size(); ++digits) {
+        const auto c = drain[digits];
+        if (c < '0' || c > '9') {
+          break;
+        }
+
+        cadence = cadence * 10 + (c - '0');
+        if (cadence > 16) {
+          // A larger cadence is indistinguishable from never draining in practice.
+          return 16;
+        }
+      }
+
+      if (digits == 0 || digits != drain.size()) {
+        return 1;
+      }
+
+      return cadence;
+    }
+
   }  // namespace vt
 
   namespace sw {
@@ -1681,6 +1714,7 @@ namespace config {
     int_f(vars, "vt_software", video.vt.vt_require_sw, vt::force_software_from_view);
     int_f(vars, "vt_realtime", video.vt.vt_realtime, vt::rt_from_view);
     int_f(vars, "vt_low_latency", video.vt.vt_low_latency, vt::rt_from_view);
+    int_f(vars, "vt_drain", video.vt.vt_drain, vt::drain_from_view);
 
     std::string vaapi_quality;
     string_f(vars, "vaapi_quality", vaapi_quality);

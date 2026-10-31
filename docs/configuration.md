@@ -3214,6 +3214,38 @@ supported on the current platform.
     </tr>
 </table>
 
+### vt_drain
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Drain completed encoder frames while submitting. The encode layer exchanges one submitted
+            frame for at most one completed packet, so a completion that arrives after the exchange
+            costs a frame of latency for the rest of the session. This option asks VideoToolbox to
+            finish the frames it already holds, which keeps latency flat. Accepts enabled to drain on
+            every submit, disabled to never drain, or a decimal number N to drain once every N submits.
+            A larger N leaves more frames in flight, which trades latency for throughput when the
+            encoder cannot sustain the requested frame rate.
+            @note{This option only applies when using macOS, and it is ignored by FFmpeg builds that
+            do not provide the frame_drain encoder option.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vt_drain = enabled
+            vt_drain = 2
+            @endcode</td>
+    </tr>
+</table>
+
 ## VA-API Encoder
 
 ### vaapi_blbrc

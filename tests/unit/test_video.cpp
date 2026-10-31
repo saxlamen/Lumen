@@ -642,3 +642,10 @@ TEST(VideotoolboxDefaultsTest, LowLatencyIsEnabledByDefault) {
 TEST(VideotoolboxDefaultsTest, RealtimeIsEnabledByDefault) {
   EXPECT_NE(0, config::video.vt.vt_realtime);
 }
+
+/**
+ * @brief Frame draining defaults to draining on every submit, matching the documentation.
+ */
+TEST(VideotoolboxDefaultsTest, FrameDrainIsEnabledByDefault) {
+  EXPECT_EQ(1, config::video.vt.vt_drain);
+}
