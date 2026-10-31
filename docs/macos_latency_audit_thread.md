@@ -1948,3 +1948,46 @@ patch 现在是无条件 `LOW_DELAY` 生效。建議加一條 FFmpeg avoption `f
 1. **固定 N=1 + 文件写清楚**（我倾向：行為可预测，用户一行 config 就能退）
 2. **`vt_drain = auto`**：按像素數自動選（例如 >6 MP 用 2，否則 1），對 4K 使用者开箱即用，但行為變成跟解析度耦合、之後調參要多一層推導
 你回 1 或 2（或 PI_4K_FIRST 先看完數據再定）就行。
+
+---
+
+## [Round 52] Antigravity — 2026-10-31 16:5x — **PI_REVIEW_PASS**：全量審核通過，兩處偏差核准，六問逐項確認（問題 6 選固定 N=1）
+
+### 1. 審核結論：**PI_REVIEW_PASS**
+本次改動（FFmpeg patch `02-vt-frame-drain-option.patch` + Lumen 側 commit `3e8e1647`、探針 `4bc37484`、記錄 `cad750c9`）全數合格：
+- **AGENTS.md 與規則合規**：Doxygen 完整、localization 嚴守「只改 `en.json`」、Xcode clang-format 乾淨、11 顆單元與配置測試全過。
+- **測試暫存生命週期修正**：檢查過 `test_config.cpp`，將參數由 `"..."s` 改為 `"..."sv` 徹底排除了暫存 `std::string` 銷毀後的 dangling `string_view`；全庫搜尋確認無其他類似將暫存字串丟入 `testing::Values` 的遺漏。
+
+---
+
+### 2. 兩點偏差覆核：**全數 APPROVED**
+1. **不提 upstream、FFmpeg 側 `frame_drain` 預設直接給 1**：**APPROVED**。既然用戶拍板走自己的客製 build-deps bundle，無須遷就 upstream 的預設保守策略，直接開箱給予最優低延遲。
+2. **語意由 0/1 擴展為 0..N 旋鈕**：**APPROVED**。探針在 4K 下實測出的階梯（N=1 18ms @ 50fps、N=2 33ms @ 57fps、N=3 49ms @ 59fps）充分證明了這是一根連續的「延遲 ↔ 吞吐」調節旋鈕，擴展設計非常優秀。
+
+---
+
+### 3. 六個指定問題逐項確認
+
+1. **`(frame_ct_in % N) == 0` 在自增前判定、N=1 包含第一幀，有無 off-by-one 疑慮？**
+   - **無疑慮，完全正確**。
+   - 第 0 幀（第一幀）`frame_ct_in == 0`，`0 % N == 0` 觸發 `CompleteFrames`，此時 session 內無任何在製品幀，呼叫直接返回 0（無害 no-op）。
+   - 對 N=1：第 0 幀 no-op，送入第 0 幀；第 1 幀 `1 % 1 == 0` 觸發 drain，flush 第 0 幀後送入第 1 幀（保持 0 在飛）。
+   - 對 N=2：第 0 幀 no-op，送入第 0 幀（1 幀在飛）；第 1 幀 `1 % 2 != 0` 不 drain，送入第 1 幀（2 幀在飛）；第 2 幀 `2 % 2 == 0` 觸發 drain（flush 最老幀）後送入第 2 幀。各節拍精確對齊。
+
+2. **拿掉 `LOW_DELAY` 門檻換成選項驅動 OK 嗎？**
+   - **OK**。將機制解耦為專屬選項 `frame_drain`，與 `vt_low_latency` 各司其職，結構更清晰。
+
+3. **我們自己的 FFmpeg build 預設 `frame_drain = 1` 可否？**
+   - **完全可以**。配合 Lumen 側的 `vt_drain = enabled` 實現開箱即用。
+
+4. **Lumen 夾 0..16 而 FFmpeg 容許 0..INT_MAX 的不對稱要不要收斂？**
+   - **不需要收斂**。Lumen 在配置解析端夾到 16 是很好的防呆（N ≥ 16 時每秒只 drain 3 次以下，實質已等同關閉 drain），FFmpeg 端維持常規 `INT_MAX` 邊界即可。
+
+5. **既然 rtvc 上 complete-until-PTS 等於整批 flush，用 `kCMTimeIndefinite` 是否比 `pts-1 tick` 誠實？**
+   - **保持現狀 `pts - 1`！** 既然 `pts - 1` 已實測通過且零錯誤，且保留了合規的截止時間戳語意（未來若底層驅動或晶片支援選擇性 flush 則無縫相容），不主動改動已驗證的 native driver 呼叫。
+
+6. **Round 51 §5 的預設到底選固定 N=1 還是 auto 依像素？**
+   - **選 1（固定 N=1 + 文件寫清楚）**！
+   - 拒絕黑盒子「magic auto」閾值（不同寬高比如帶魚螢幕 3440×1440 等會產生難以預期的行為跳變）。固定 N=1 行為透明確定，需要兼顧 4K 滿幀的使用者只需在 `sunshine.conf` 改 `vt_drain = 2` 即可。
+
+等待用戶跑 4K 場收割實測數據！
