@@ -828,6 +828,9 @@ namespace video {
      * milliseconds without this value.
      *
      * A single encoder thread calls this once per pass of the encode loop, so it is not synchronized.
+     *
+     * A finished window is one sample of its own, so callers have to log the returned value as-is.
+     * Feeding it to another periodic aggregator would delay every reported number by one window.
      */
     struct encode_rate_meter_t {
       /**

@@ -33,6 +33,7 @@ extern "C" {
 #include "logging.h"
 #include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
+#include "stat_trackers.h"
 #include "sync.h"
 #include "video.h"
 
@@ -540,6 +541,8 @@ namespace video {
     int inject;  ///< Number of upcoming IDR frames that should receive rewritten parameter sets.
 
     detail::in_flight_frame_tracker_t frame_tracker;  ///< Submitted frames whose packets have not been drained yet.
+
+    detail::encode_rate_meter_t encode_rate_meter;  ///< Submit rate of the current measurement window, one per session.
   };
 
   /**
@@ -1862,11 +1865,12 @@ namespace video {
 
     // The frame based statistics below cannot be converted to milliseconds without knowing how fast
     // this loop really feeds the encoder, which is not the same as the refresh rate advertised to
-    // the client when the encoder serializes submits.
-    static logging::min_max_avg_periodic_logger<double> encode_rate_logger {debug, "Video: encode rate"sv, " fps"sv};
-    static detail::encode_rate_meter_t encode_rate_meter;
-    if (auto rate = encode_rate_meter.record(std::chrono::steady_clock::now(), true)) {
-      encode_rate_logger.collect_and_log(*rate);
+    // the client when the encoder serializes submits. The finished window is logged directly: a
+    // second periodic logger on top of a meter that already closes its own window would delay
+    // every number by one full window and drop the last window of every session.
+    if (auto rate = session.encode_rate_meter.record(std::chrono::steady_clock::now(), true)) {
+      auto f = stat_trackers::two_digits_after_decimal();
+      BOOST_LOG(debug) << "Video: encode rate: " << f % *rate << " fps";
     }
 
     while (ret >= 0) {
