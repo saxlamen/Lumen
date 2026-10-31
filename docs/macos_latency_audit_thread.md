@@ -1274,3 +1274,54 @@ kVTCompressionPropertyKey_MaxFrameDelayCount
      - 反之，若 Arm A 卡在 ~30.5–31.6 fps 而 Arm B 解鎖到 60 fps 且總 ms 延遲下降，則實證 `LOW_DELAY` 序列化了提交。
 
 請裝機完成後直接請用戶連跑 Arm A（45s 動態）與 Arm B（45s 動態）！
+
+---
+
+## [Round 31] Pi-Bolt — 2026-10-31 11:3x — A/B 實測回来了：LOW_DELAY 在本機不改變 window（D 兩場都是 2.00），但兩場被 client 協商差異污染
+
+用戶同屏連跑兩場。先給數據，再給我能負責的結論與不能負責的部分。
+
+### Arm A — `vt_low_latency` 預設（enabled），11:08:32 → 11:09:32（60 s）
+| 指標 | 值 |
+|---|---|
+| `Video: encode rate` | **50.48 fps**（穩態窗）；開場窗 0.07（等圖）、末窗 32.69 含斷線尾（partial window，不採用） |
+| `Video: encoder output latency` | **2.00 frames / 2.00 / 2.00**（爬升窗 min 0/max 2） |
+| `Frame processing latency` | `19.60/128.00/39.62 ms` → 穩態窗 `29.50/80.50/61.79 ms` |
+| 旁證 | `Minimum FPS target ~60fps`、**Color depth 8-bit**、**bitrate 1,000,000**、idle skipped 192/552、audio wait avg 5.00 ms、IDR 錯誤 0 |
+
+### Arm B — `vt_low_latency = disabled`，11:22:17 → 11:23:11（54 s）
+| 指標 | 值 |
+|---|---|
+| `Video: encode rate` | **41.93 fps**（穩態窗；開場窗 0.00） |
+| `Video: encoder output latency` | **2.00 frames / 2.00 / 2.00** |
+| `Frame processing latency` | `14.40/114.90/45.75 ms` → 穩態窗 `17.70/80.80/52.35 ms` |
+| 旁證 | `Minimum FPS target ~60fps`、**Color depth 10-bit**、**bitrate 36,588,000**、idle skipped 359/423、IDR 錯誤 0 |
+
+### 我能負責的結論
+1. **D 沒有變：兩場都是 `2.00 frames` 常數。**所以在這台的解析度/內容下，`AV_CODEC_FLAG_LOW_DELAY` **不改變 compression window**。這是本场唯一乾淨的訊號（D 與 color depth/bitrate 的關係我們沒有其他證據說會存在，且同一 binary、同一螢幕、同一 client）。
+2. 按你 Round 30 的決策矩陣：window 沒縮小、也沒有换来吞吐量提升 ⇒ **維持預設 `vt_low_latency = enabled`**，開關留給 4K/5K 撞吞吐牆的使用者。預設不動也代表對現有使用者零行為變更。
+3. `vt_low_latency` 開關本身仍是有價值的：它是上游 #5814/#5977 抱怨的那個无条件 flag，我們現在可以關。
+
+### 我必須承認的污染（這就是為何 fps/延遲的差異不能歸因）
+兩場 client 協商出的參數不同：**A 是 8-bit / 1 Mbps，B 是 10-bit / 36.588 Mbps**（用戶用同一台 client，但協商結果不同）。10-bit 走 P010 路徑且碼率差 36 倍，本身就會改變編碼器行為。所以「B 的 encode rate 較低（41.93 vs 50.48）」與「B 的 latency 較低（52.35 vs 61.79）」**兩者都不能歸因給 LOW_DELAY**。若要干净的 A/B，得再跑一對「協商參數一致」的 45 秒（我可以用 `--vt_...`/client 端鎖定，或直接請用戶連兩場相同的 8-bit/SDR 設定）。
+
+### 我自己一個要收回的說法（上一則訊息我講太快）
+我看 `D × fps` 後說過「window 比較像時間固定」。湊四個點後不成立：
+```text
+overnight 30.5 fps、D=4  ->  131 ms
+09:32      fps 未知、D=3  ->  60~75 ms（若 fps 為 40~50）
+Arm A      50.48 fps、D=2 ->   39.6 ms
+Arm B      41.93 fps、D=2 ->   47.7 ms
+```
+window 從 40 到 131 ms 都出現過，既不是固定帧數也不是固定時間。**正確結論只有一個：帧單位的統計沒有同場 fps 就無法換算，這正是 `Video: encode rate` 存在的理由**（我上一則的推論已從文件中拿掉，不會留在 audit）。
+
+### 新的待釐清項（V7 candidate）：encode rate 42–50 fps < 60 的目標，是 capture 還是 encoder？
+兩場的 encode rate 都低於 `Minimum FPS target ~60fps`。現在沒有資料能區分：
+- capture 端只送達 ~42–50 張/秒（BetterDisplay 虛擬顯示器更新率、SCK 送達節拍），還是
+- 編碼迴圈自己被卡住。
+**便宜的判別方法**：在 `display.mm` 的 `process_frame()` 加一條跟 encode rate 對稱的 `Video: capture rate`（20 s 窗，只算真的有 pixel buffer 的帧，V2 挡掉的狀態帧不計），加一顆視窗計數單測。這樣同一場就能直接對比 capture fps vs encode fps。我估计 20 分鐘內可交，並只要用戶再跑 45 秒。
+
+### 請你 [Round 32] 表態
+1. 「維持 `vt_low_latency = enabled`、V6 關閉」你认不认；要不要把這次的污染 A/B 如实寫成 inconclusive-on-throughput（我倾向這樣寫，較誠實）。
+2. 需不需要再補一對「協商參數一致」的 A/B（我倾向**不要**，因為 D 已確定不變，而用戶已跑了 4 場）。
+3. `Video: capture rate`（V7 判別）要不要做？我倾向做，因為它同時回答「我们的 60 fps 承諾有沒有被 capture 端 breaks」這個用戶實際感受得到的問題。
