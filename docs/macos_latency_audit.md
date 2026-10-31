@@ -259,6 +259,16 @@ Not changed, with the reasons below: I1, I2, I4, I5, I6, I7. Open performance wo
 
 Called **V4** in `docs/macos_latency_audit_thread.md`; numbered V6 here because V4 and V5 are already taken in this document.
 
+**Prior art, which mostly confirms the measurement**
+
+- Apple defines exactly this window: `kVTCompressionPropertyKey_MaxFrameDelayCount` is "the maximum number of frames that a compressor is allowed to hold before it must output a compressed frame … If the maximum frame delay count is M, then before the call to encode frame N returns, frame N-M must have been emitted. The default is `kVTUnlimitedFrameDelayCount`, which sets no limit on the compression window." (`VTCompressionProperties.h`, macOS 10.8 and later, read/write). The measured depth of three to four frames is that compression window.
+- The knob is not reachable through FFmpeg. The deployed static library exposes only `allow_sw`, `require_sw`, `realtime`, `prio_speed`, `max_ref_frames` and `rate_control_mode` for VideoToolbox (checked with `strings` on `libavcodec.a`), and at least one project reports VideoToolbox rejecting `MaxFrameDelayCount` with `-12900`, so setting the property would not be reliable even if it were exposed.
+- Sunshine sets `AV_CODEC_FLAG_LOW_DELAY` unconditionally (`src/video.cpp:2110`), which FFmpeg's VideoToolbox encoder passes on as `kVTVideoEncoderSpecification_EnableLowLatencyRateControl` (the symbol is present in the deployed `libavcodec.a`). Upstream issues document the cost of that flag: 4K capped near 55 FPS (LizardByte/Sunshine#5814), third-party VideoToolbox encoders rejected with `-12902` and silently falling back to `libx264` (#5977), and the reference-frame behaviour of H.264 on macOS (#5415, #5013 — the latter cites this fork as a workaround).
+- LizardByte/Sunshine#5441 is the same complaint from users. Contributor martona: "It's not the capture flow, it's the encoder: ffmpeg with VT in particular does have a rather gnarly 120ms inherent latency. You can switch to `encoder = software` in the config; it's better quality too, at least with normal desktop use. (You get 4:4:4 which VT cannot produce.)"
+- `oujinhaoai/Sunshine` pull request 1 clears `AV_CODEC_FLAG_LOW_DELAY` for HEVC VideoToolbox and reports 5K going from about 31.6 FPS to 60 FPS, because with low-latency rate control `avcodec_send_frame()` waits for one encoded frame on Apple Silicon. That fork then bounded in-flight depth to two frames and had to map asynchronously returned packets back to capture timestamps — the problem `f2638e39` already solves here.
+
+**Consequence for the numbers above.** The 30.5 FPS session has two candidate causes: a 30 Hz client and display, or the low-latency rate control serializing submits as described in `oujinhaoai/Sunshine#1`. The arithmetic (depth divided by frame rate) holds either way, but the attribution is open until a session records its own encode rate next to the depth.
+
 **Measured, not inferred.** `Video: encoder output latency` (added in `f2638e39`) reports `frame_nr - AVPacket::pts` as a 20 s min/max/average:
 
 ```text
@@ -280,7 +290,7 @@ That long session also produced 7984 keyframes with zero `Encoder did not produc
 
 **Proposed mechanism** (from disassembly of the deployed binary, see thread Round 22): the FFmpeg VideoToolbox wrapper pops at most one packet per `avcodec_receive_packet()` call, and the encode loop submits back-to-back whenever an IDR was requested and the image queue is empty (`src/video.cpp:2508`), so a few `AVERROR(EAGAIN)` rounds leave three or four already-encoded packets queued inside the wrapper. That is a ratchet, not a policy.
 
-**First experiment if this is picked up:** limit the zero-delay burst on IDR requests, or drain the wrapper queue after submitting, and read `Video: encoder output latency` to see whether the depth falls to one. Untested alternatives are `AllowTemporalRedundancy`, `AllowFrameReordering`, `multi_pass` and `bitrate_mode` passed as encoder options. This is P3 because the delay is inside the encoder rather than introduced by this fork, and because those properties also affect bitrate and image quality.
+**First experiment if this is picked up:** make `AV_CODEC_FLAG_LOW_DELAY` configurable for VideoToolbox sessions and compare encode rate, `Video: encoder output latency` and `Frame processing latency` with it on and off, since the upstream reports above show it trades throughput for the compression window. A second measurement with `encoder = software` gives the lower bound, because software encoders return the packet of the frame that was just submitted. `MaxFrameDelayCount` should not be chased through FFmpeg.
 
 ### I2 (open) — per-event WindowServer position query and cursor warp
 

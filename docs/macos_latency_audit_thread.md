@@ -1056,3 +1056,48 @@ Frame processing latency ≈ encoder_depth / frame_rate + 15~25 ms
 顺带两点运维观察（不用动，记录性质）：
 - log rotation 只在**服务重启时**发生：那份 debug log 一路长到 584 MB 才在 09:50 我重启时轮替成 `sunshine.log.1`。往后再开 debug，记得中途重启一次或在量完后立刻收回 info。
 - 09:32 那场只有开机时 4 次 IDR 要求（`Frame 1`），整场没有 client 再要求 IDR；所以「60 秒那场 IDR=0」的样本量本来就小，是上面那份 10.7 小时的数据把它补成强证据的。
+
+---
+
+## [Round 25] Pi-Bolt — 2026-10-31 10:3x — 網路/SDK 前例調査：V6 的機制解釋需要再修正一次（已寫進 audit 的 V6 節）
+
+用戶叫我上网查有沒有相關資料。查到了，而且直接打到 V6。以下全部是我自己拉過/验過的一手來源。
+
+### 1. Apple 標頭自己定義了我們量到的那個 window（本地 SDK，非網路）
+`VTCompressionProperties.h`：
+```text
+kVTCompressionPropertyKey_MaxFrameDelayCount
+    "the maximum number of frames that a compressor is allowed to hold before it must
+     output a compressed frame … If the maximum frame delay count is M, then before the
+     call to encode frame N returns, frame N-M must have been emitted.
+     The default is kVTUnlimitedFrameDelayCount, which sets no limit on the compression window."
+```
+我們量的 `D = 3–4 frames` 就是這個 compression window，而 **Apple 預設是 unlimited**。同一個標頭還有 `SuggestedLookAheadFrameCount`（macOS 15+，"This property directly affects latency of the video encoder"；設了 `EnableLowLatencyRateControl` 会被忽略）。
+
+### 2. 我們已经開了 LOW_DELAY，而且它是无条件開的
+`src/video.cpp:2110`：`ctx->flags |= AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY;`（對所有 avcodec 編碼器）。FFmpeg 的 videotoolboxenc 把 LOW_DELAY 轉成 `kVTVideoEncoderSpecification_EnableLowLatencyRateControl` —— 我用 `strings` 對 `cmake-build-macos/_deps/ffmpeg/lib/libavcodec.a` 验過，符號 `EnableLowLatencyRateControl` 在裡面；同時确认這版 FFmpeg 對 VT 只暴露 `allow_sw / require_sw / realtime / prio_speed / max_ref_frames / rate_control_mode`，**沒有 frame-delay 相關的 avoption**（所以 `MaxFrameDelayCount` 走 FFmpeg 這條路本来就碰不到；另外 MacVR#1 回報 VT 會用 `-12900` 拒收這個 property）。
+
+### 3. 上游已有的四顆 issue，全部指向同一個 trade-off
+| 上游 | 內容 |
+|---|---|
+| LizardByte/Sunshine **#5441** "MacOS hosting latency" | 使用者說 cursor latency 輸 Parsec/TeamViewer。貢獻者 **martona**：「**It's not the capture flow, it's the encoder: ffmpeg with VT in particular does have a rather gnarly 120ms inherent latency. You can switch to `encoder = software` in the config; it's better quality too … (You get 4:4:4 which VT cannot produce.)**」→ 与我们量的「大头在編碼器」完全一致，120 ms 也跟我 30.5 fps 那場的 131 ms 同量級。同一串裡 neatnoise 建議「改用 SCK + queueDepth=1」，martona 反駁「不是 capture 的問題」。**我們的 queueDepth=16 因此不是延遲元凶**（这点被上游對話支持）。 |
+| **#5814** | LOW_DELAY 強制 low-latency rate control → 4K 卡在 ~55 fps（**吞吐量代價**）。 |
+| **#5977** | LOW_DELAY 讓不相容的第三方 VT 編碼器被 `VTCompressionSessionCreate` 以 `-12902` 拒掉 → 无声 fallback 到 libx264。 |
+| **#5415 / #5013** | VT 的 `max_ref_frames` 行為（我們設 1）；#5013 裡報告者直接寫「**The Sunshine fork Lumen addressed this issue by removing max_ref_frames=1 for H.264 VT (fixes all-IDR bug)**」——上游已經在引用我們這顆 fork 的修法。 |
+
+### 4. 最直接的前例：另一个 Sunshine fork 把 LOW_DELAY 關了
+`oujinhaoai/Sunshine` PR#1「fix(macos): pipeline HEVC VideoToolbox encoding」：
+- HEVC VT **清除 `AV_CODEC_FLAG_LOW_DELAY`**，5K 從 **~31.6–31.8 fps 回到 ~60 fps**；root cause 是 low-latency rate control 讓 `avcodec_send_frame()` 在 Apple Silicon 上「等一帧編完才收下一帧」。
+- 他們另外：要求 async queue depth 2 帧、**把非同步回來的 packet 對回原始 PTS**、丢掉被丢棄/重排後的過期 timestamp 条目。
+- 後兩項正是我們 `f2638e39` 已經做的（in-flight ring + PTS 對账 + 命中即消費）。
+
+### 5. 對我們結案結論的兩處修正（誠實標注）
+1. **30.5 fps 那一夜的成因變成開放問題**：可能是 client/顯示器 30 Hz，**也可能是 LOW_DELAY 把 send 序列化**（oujinhaoai 量到的就是 ~31.6 fps，數字太接近，不能忽視）。延遲算式 `depth / fps + 15~25 ms` 不變，但「fps 从哪來」還沒結。注：那份 584 MB log 已照用戶要求砍掉，所以此事**無法用舊 log 覆核**，只能下一場量（建議加一條「每秒實際編碼帧數」或直接在現有的 20 s 統計裡附一個 fps）。
+2. **Round 22 的「棘輪（已編好但沒被 pop）」機制可信度下降**：我們的接收迴圈本來就 `while (ret >= 0)` pop 到 EAGAIN，所以「已編好卻堆在佇列」站不住；JStream 那顆「drain a full VideoToolbox queue without a frame-delay limit」也是同一思路的另一面（它處理的是「沒有 delay limit 時佇列會滿」）。比較站得住的敘述是：**VT 在 unlimited compression window 下確實還沒編完那 3–4 張**，而 window 大小受 rate control（LOW_DELAY/lookahead）影響。
+
+### 6. 建議的下一步（V6 從 P3 升 P2 與否請你表態）
+1. **把 `AV_CODEC_FLAG_LOW_DELAY` 做成 VT 可關的開關**（一顆小 commit + 一條 fps 統計），同一場量：LOW_DELAY on/off 的 `Video: encoder output latency`、實際編碼 fps、`Frame processing latency`。這是唯一有前例支撐、又能用現有指標驗證的實驗。
+2. **`encoder = software`（`vt_software`/x264）對照一場**： martona 的建議，D≈0，還給 4:4:4；代價是 CPU。
+3. **不要**試圖從 FFmpeg 設 `MaxFrameDelayCount`（沒 avoption、且有 `-12900` 前例）。
+
+請給 [Round 26]：(a) 上面兩處修正你认不认；(b) V6 要不要升 P2、先做 1 還是 2；(c) 「實際編碼 fps」要不要顺帶加進 `Video: encoder output latency` 那條統計（我倾向加，因為它一次解決第 5 節第 1 點的覆核問題）。
