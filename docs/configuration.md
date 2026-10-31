@@ -3186,6 +3186,34 @@ supported on the current platform.
     </tr>
 </table>
 
+### vt_low_latency
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Low latency encoding. Requests that VideoToolbox shrink the number of frames it may hold
+            before emitting one, which lowers streaming latency.
+            @note{This option only applies when using macOS.}
+            @warning{Disabling low latency encoding lets the encoder hold several frames, which
+            increases latency, but it can raise the achievable frame rate when the encoder otherwise
+            serializes submits.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            vt_low_latency = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## VA-API Encoder
 
 ### vaapi_blbrc

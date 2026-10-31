@@ -118,6 +118,8 @@ namespace config {
       int vt_require_sw;  ///< Whether VideoToolbox must use software encoding.
       int vt_realtime;  ///< Whether VideoToolbox uses realtime encoding mode.
       int vt_coder;  ///< VideoToolbox entropy-coding mode.
+
+      int vt_low_latency {1};  ///< Whether VideoToolbox sessions request low-delay (low-latency rate control) encoding.
     } vt;  ///< VideoToolbox encoder options.
 
     struct {

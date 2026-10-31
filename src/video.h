@@ -800,6 +800,27 @@ namespace video {
     void stamp_frame_timestamp(const std::shared_ptr<platf::img_t> &img, bool frame_captured, std::chrono::steady_clock::time_point capture_time);
 
     /**
+     * @brief Decide which AVCodecContext flags to request for an encoder.
+     *
+     * AV_CODEC_FLAG_LOW_DELAY is what makes FFmpeg ask VideoToolbox for low-latency rate control.
+     * That shrinks the encoder's compression window, but on Apple Silicon it can also serialize
+     * avcodec_send_frame() and halve the achievable frame rate, so it has to stay switchable for
+     * VideoToolbox sessions while other encoders keep the previous behaviour.
+     *
+     * @param is_videotoolbox True when the selected encoder family is VideoToolbox.
+     * @param low_latency_enabled Value of the `vt_low_latency` configuration option.
+     * @return AV_CODEC_FLAG values to assign to AVCodecContext::flags.
+     */
+    constexpr int encode_flags_for_encoder(bool is_videotoolbox, bool low_latency_enabled) {
+      auto flags = AV_CODEC_FLAG_CLOSED_GOP;
+      if (!is_videotoolbox || low_latency_enabled) {
+        flags |= AV_CODEC_FLAG_LOW_DELAY;
+      }
+
+      return flags;
+    }
+
+    /**
      * @brief Per-frame metadata for frames that are still inside an asynchronous encoder.
      *
      * Encoders such as VideoToolbox hold several frames in flight, so the packet returned by

@@ -8,6 +8,7 @@
 // standard includes
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <limits>
 #include <optional>
 #include <tuple>
@@ -565,3 +566,26 @@ TEST(InFlightTrackerTest, RejectsNegativePts) {
   EXPECT_EQ(tracker.submission_count(), 0U);
   EXPECT_FALSE(tracker.resolve_packet(-1, -1).has_value());
 }
+
+/**
+ * @brief VideoToolbox keeps both flags while low-latency mode is requested.
+ */
+TEST(EncodeFlagsTest, VideotoolboxWithLowLatency) {
+  EXPECT_EQ(video::detail::encode_flags_for_encoder(true, true), AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY);
+}
+
+/**
+ * @brief Clearing low-latency mode leaves the closed-GOP behaviour untouched.
+ */
+TEST(EncodeFlagsTest, VideotoolboxWithoutLowLatency) {
+  EXPECT_EQ(video::detail::encode_flags_for_encoder(true, false), AV_CODEC_FLAG_CLOSED_GOP);
+}
+
+/**
+ * @brief Encoders other than VideoToolbox always keep the previous flags.
+ */
+TEST(EncodeFlagsTest, OtherEncodersIgnoreTheOption) {
+  EXPECT_EQ(video::detail::encode_flags_for_encoder(false, false), AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY);
+  EXPECT_EQ(video::detail::encode_flags_for_encoder(false, true), AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY);
+}
+

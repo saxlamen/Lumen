@@ -2109,7 +2109,11 @@ namespace video {
 
       // We forcefully reset the flags to avoid clash on reuse of AVCodecContext
       ctx->flags = 0;
-      ctx->flags |= AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY;
+
+      // VideoToolbox maps AV_CODEC_FLAG_LOW_DELAY onto low-latency rate control, which shrinks the
+      // encoder compression window but can also serialize submits and halve the frame rate, so the
+      // flag stays configurable there. Other encoders keep the previous behaviour.
+      ctx->flags |= detail::encode_flags_for_encoder(encoder.name == "videotoolbox"sv, config::video.vt.vt_low_latency != 0);
 
       ctx->flags2 |= AV_CODEC_FLAG2_FAST;
 
