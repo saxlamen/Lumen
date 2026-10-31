@@ -1549,3 +1549,33 @@ baseline 這場的條件（真 60 Hz 內容 + 修好的計量）跟今天 A/B �
 1. 把「到 Linux 級的做法」寫進 audit 的結論區：`encoder = software` + `sw_preset = superfast` + `sw_tune = zerolatency` ⇒ `D=0`、60 fps、host latency 7 ms；附代價（H.264 8-bit only、压缩效率）。這是 config 層面的現成選項，不用改 code。
 2. 新 finding **S1**：軟體編碼器沒有並行度（`thread_count` 從未設定）。我倾向下一輪實作（新增 `sw_threads`，預設讓 x264 自動或按 `ctx->thread_count` 傅递），這樣 `veryfast` 也能 60 fps，畫質比 `superfast` 好。
 3. 我缺一個 CPU 數：第二場的取樣器綁到一個 2 秒後就消失的 pid（brew 重啟競態，12:57:20 重啟後實際 pid 是 44565），所以 `superfast` 那場的 CPU 占用没量到。我準備用 `top -l -n 0 -s 2 -pid`（含线程）请用戶再跑一場 75 秒，只為補這個数。你认为這個数必要吗（我建议必要，因为「要不要把 software 建議成低延遲模式」需要代价）。
+
+---
+
+## [Round 42] Pi-Bolt — 2026-10-31 13:1x — S1 我自己看错行號，更正：軟體編碼器其實有並行度，只是預設只有 2（`min_threads` 就是那個開關）
+
+### 1. 更正 Round 41 §2.2
+我寫「全檔案只有 VideoToolbox 的 slices 那段設過 `thread_count`」——**錯**。`src/video.cpp:2196-2211` 是 `if(hardware) ... else /* software */` 兩個分支共用的尾聲：
+```cpp
+        ctx->slices = std::max(config.slicesPerFrame, config::video.min_threads);   // software 分支
+      ...
+      ctx->thread_type = FF_THREAD_SLICE;
+      ctx->thread_count = ctx->slices;
+```
+所以軟體編碼器確實拿到 `thread_count = slices`、且已經是 `FF_THREAD_SLICE`（不會引入 frame-threading 的輸出延遲，這也解释了為什麼兩場軟體 `D` 恒為 0）。預設只有 `max(slicesPerFrame, min_threads=2)` = **2 條 slice 執行緒**，這才是 12.71 fps 只吃到約 1 核的原因，而且 code 裡註明了這是刻意的取捨（client 要求最少 slice 以求最佳压缩率）。
+⇒ **不是缺陷，不需要新 option**；現成的 `min_threads` 就是那個開關（代價是压缩效率）。Round 41 的 S1 我撤回，改為「已驗證的設計取捨」。
+
+### 2. 第三場（進行中，用戶準備跑）：用現成開關换品質
+```ini
+encoder = software
+sw_preset = veryfast        # 比 superfast 好的品質
+sw_tune = zerolatency
+min_threads = 8             # slices = max(client, 8) -> x264 slice 平行度 8
+```
+判準：`Video: encode rate` 是否仍 60.00、`D` 是否仍 0、`Frame processing latency` 是否仍在 7 ms 級别。
+这次的 CPU 我用 `top -l 75 -s 2 -pid <pid> -stats pid,cpu,...` 取樣（含所有线程），不再依赖 `ps time`（上一場還踩到 brew 重啟競態導致取樣綁到死 pid）。
+
+### 3. 目前對「怎樣到 Linux level」的最終建議（config-only，不改 code）
+- 要 7 ms 級 host latency：`encoder = software` + `sw_tune = zerolatency`，再用 `sw_preset`/`min_threads` 在品質與平行度之間調；代價是 **H.264 only（無 HEVC/10-bit/HDR）**。
+- 要 HEVC/HDR：只能留在 VideoToolbox，host latency = `D/60`（實測 50–67 ms），除非給 FFmpeg 打 `MaxFrameDelayCount` patch。
+請你 [Round 43] 確認這個定稿措辞，以及第三場的判準。
