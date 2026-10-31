@@ -1991,3 +1991,41 @@ patch 现在是无条件 `LOW_DELAY` 生效。建議加一條 FFmpeg avoption `f
    - 拒絕黑盒子「magic auto」閾值（不同寬高比如帶魚螢幕 3440×1440 等會產生難以預期的行為跳變）。固定 N=1 行為透明確定，需要兼顧 4K 滿幀的使用者只需在 `sunshine.conf` 改 `vt_drain = 2` 即可。
 
 等待用戶跑 4K 場收割實測數據！
+
+---
+
+## [Round 53] Pi-Bolt — 2026-10-31 17:2x — macOS HDR 研究完成（新文件 `docs/macos_hdr.md`）：現在是結構上不可能 HDR、OS 能力齊全、瓶頸在「螢幕沒有 HDR」與 `is_hdr()` 沒人實作
+
+用戶把 4K 場往後延（「4K 之後再說」），改問 HDR 怎麼做。我開了三線研究（本 tree code audit / 本機 SDK header 與實測 / upstream+third-party 前人做法），結論寫成 `docs/macos_hdr.md`。
+
+### 1. 三條最重要的事実
+1. **今天不可能 HDR，而且是結構性的**：`src/platform/common.h:756` `is_hdr()` 與 `:767` `get_hdr_metadata()` 的預設 false 在 macOS **沒有任何 override** ⇒ `src/video.cpp:2633` 的 AND 閘永不成立 ⇒ `src/video_colorspace.cpp:33` 不會選 bt2020 ⇒ `src/stream.cpp:1137` 的 out-of-band HDR 訊息永不 enable、`src/video.cpp:2337-2369` 的 2086/MaxCLL side data 永不產生。加上 `src/platform/macos/sc_capture.m:228-256` 完全沒設色彩空間/dynamic range、整個 `src/` 沒讀寫過任何 `kCVImageBuffer*` 附屬 ⇒ 我們現在就是 **10-bit SDR**，與 audit 的 V4 完全吻合。另有兩個硬限制：macOS YUV444 是 `AV_PIX_FMT_NONE`（`src/video.cpp:1388`）、`src/display_device.cpp:951-955` 明文拒絕 HDR display device 請求。
+2. **OS 端能力齊全（本機 SDK macOS 27.2 全部可用）**：`SCStreamConfiguration.captureDynamicRange`（15.0+，**Apple Silicon only**）與 preset `.captureHDRStreamCanonicalDisplay`/`.captureHDRStreamLocalDisplay`、`colorSpaceName`/`colorMatrix`（12.3）、`x420`/`xf20`、`CVBufferCopyAttachments`（12.0）、`kCVImageBuffer{MasteringDisplayColorVolume,ContentLightLevelInfo}Key`（10.13）、`kVTCompressionPropertyKey_HDRMetadataInsertionMode`（11.0，**預設 Auto 就會依輸出色彩空間自己插入 HDR10 SEI**）、`_RequestSDRRangePreservation`（**26.0**）、`kVTProfileLevel_HEVC_Main10_AutoLevel`、`OutputBitDepth`（12.3）。FFmpeg 8.1 vtenc 會把 `AVCodecContext` 的 primaries/TRC/matrix 寫成 VT session 屬性、`P010 ↔ x420/xf20`，zero-copy 保留 IOSurface 與其附屬 ⇒ **我們的 zero-copy 路徑免費拿到這部分**。**唯一缺口：沒有公開 API 能把顯示器切進 HDR 模式**（CG 那邊只有 `CGContextSetEDRTargetHeadroom`，NSScreen 只能讀）。
+3. **用戶端要的是 out-of-band 旗標，不是 10-bit 像素**：`control_hdr_mode_t`（`IDX_HDR_MODE = 11`）才是 Moonlight 進 HDR 的開關；另外 FFmpeg 的 VT 編碼器**忽略** `AV_FRAME_DATA_MASTERING_DISPLAY_METADATA`（只轉 CEA-608），所以真要自訂 MDCV 得直接設 VT 的 `MasteringDisplayColorVolume`/`ContentLightLevelInfo` 屬性。
+
+### 2. 前人做法（四個上游 PR 全部 unmerged，这点很關鍵）
+- **PR 5957**（Cartterr，2026-10-19 被 ReenigneArcher 以「已有兩開 PR 在做」關閉）：最完整的 HDR10 實作——`captureDynamicRange = HDRCanonicalDisplay` + `colorSpaceName = kCGColorSpaceITUR_2100_PQ` 直接進 `hevc_videotoolbox`；`is_hdr()` = `maximumPotentialExtendedDynamicRangeColorComponentValue > 1`；因為 macOS 不暴露 mastering metadata 所以**合成** MDCV；並回報 **SCK 把 SDR white 放在 100 nits、看起來比用戶端自己的 SDR 還灰**，於是加 Metal pass 把 PQ ×2.03、新增 `vt_hdr_sdr_white`（預設 203）。
+- **PR 5817**（andygrundman，open）：config `capture_dynamic_range_macos = hdr_canonical|hdr_local|sdr`，但用 `kCGColorSpaceDisplayP3_PQ`（P3-PQ，不是 ITU-R 2100）。
+- **PR 5511**（martona，open）：只有 SCK 後端、無 HDR（就是我們已經有的東西）。
+- **PR 5190/5191/5201/5192**（Nottlespike，closed unmerged）：兩條技術教訓——`AVCaptureScreenInput` 要 10-bit 會**靜默回 8-bit BGRA**（OS 層級的謊）；EDR 必須 gate 在**協商後的 HDR 狀態**（`config.dynamicRange`/client `hdrMode`）而不是像素深度，否則會把 PQ buffer 塞進 SDP 寫著 SDR 的串流。
+- 已合併且我們已有：PR 5429（`resolve_dynamic_range()` 降回 SDR）、PR 5690（probe 失敗就不廣告 Main10）。
+- 第三方：**kilde** 用 `captureDynamicRange` + macOS 26 的 `...PreservedSDRHDR10` preset（錄影不是串流）；**Onset #169** 是最完整的書面 recipe；**aetherdesk**/**simlock** 都只有 SDR（我讀過它們的原始檔確認）。
+- 顯示器那層：BetterDisplay 的 #141「dummy 無法 HDR（CGVirtualDisplay 限制）」已被 **#5257「Add HDR support for virtual screens」（2026-05 closed completed）** 取代 ⇒ HDR 虛擬屏/HDR colour profile/forced HDR 可做，部分在付費版。MonitorControl 只有 DDC/CI，幫不上。
+
+### 3. 本機實測（`scripts/hdrprobe.swift`，已入 repo）
+- BetterDisplay 虛擬螢幕 **`maximumPotentialExtendedDynamicRangeColorComponentValue = 1.0` ⇒ 完全不具 HDR 能力**，HDP-V104 因鏡像被摺疊看不到自己的 EDID。也就是說**第 1 層（螢幕真的 HDR）現在就沒滿足**，任何 code 改動都量不出東西。
+- SCK 側 `-3801`（未給螢幕錄製權限）⇒ attachments 還沒量到。探針已簽章 `com.saxlamen.hdrprobe` 讓 grant 可持久，會印出 EDR 狀態 + 每種配置（SDR/BGRA、SDR/420v10p、兩個 HDR preset、手動 canonical）的完整色彩附屬。
+- 順手記一個要重驗的點：header 明文 `queueDepth` "should not exceed 8 frames"，我們為了 IOSurface 生命期用 **16**（Round 3-8 的決定）。SDR 下實測無害，但 PR 5957 提過佇列/池大小不符時有 2.6 ms/帧的複製損耗，HDR 場要特別看。
+
+### 4. 三層模型與選項（effort/risk 表在 `docs/macos_hdr.md`）
+A. **跟 PR 5817 的 config 命名 + PR 5957 的機制**（`capture_dynamic_range_macos`，ITUR_2100_PQ 而非 P3_PQ，`is_hdr()` 用 potentialEDR，合成 `get_hdr_metadata()`，EDR gate 在協商後的 HDR）：約 150-250 行 + 測試，一天含量測。
+B. **只開 `captureDynamicRange` 的半做**（約 40 行）：用戶端仍被告知 HDR off，只能當探針用。
+C. **等上游合併**：四個嘗試都卡住了，時程未知。
+
+### 5. 請你表態（五題）
+1. 現在做、还是先只把第 1 層（BetterDisplay HDR profile）打通 + hdrprobe 量到 attachments 再决定？我倾向后者。
+2. `hdr_canonical` 还是 `hdr_local`（Onset 說 local 在某些 15.x 不可靠，Nottlespike 却刻意選 local）？
+3. SDR white 100 nits 的補法：PR 5957 的 Metal ×2.03，还是先试 macOS 26 的 `kVTHDRMetadataInsertionMode_RequestSDRRangePreservation`？我倾向後者——Metal pass 會吃掉我們剛買回來的延遲。
+4. 設定名稱跟 upstream 的 `capture_dynamic_range_macos`，还是自創 `vt_hdr`？
+5. `is_hdr()` 的 gate：只看螢幕能力（PR 5957 做法）還是 gate 在協商後的 HDR（Nottlespike 的教訓）？我强烈倾向後者。
+請回 PI_HDR_PROBE_FIRST / PI_HDR_NOW / PI_HDR_WAIT，外加 2/3/4/5 的選擇。
