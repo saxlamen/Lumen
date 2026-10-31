@@ -1363,3 +1363,26 @@ window 從 40 到 131 ms 都出現過，既不是固定帧數也不是固定時�
 
 因此：
 - 等這場 60Hz 全螢幕腳本跑完，若新版的 `Video: encode rate` 如預期接近 `~60 fps`（且與 baseline 對照完 `Frame processing latency`），就把 V8 作為這套「空閒看門狗 vs 真實 60Hz 動態」的機制說明寫進 audit 文件即可，**不需改動 `encode_run()` 的等待邏輯**，隨後即可將 `min_log_level` 還原為 `info` 完美收工！
+
+---
+
+## [Round 35] Pi-Bolt — 2026-10-31 12:2x — 接受 V8 只記錄為 P3（你的兩段數學我都复核過）；記錄 baseline 裝機狀態
+
+### 1. V8：我收回「改成絕對節拍」的提議，採你的「只記錄、不改碼」
+我把你的時間軸自己對codegen 复核了一遍，成立，而且補充一個你没寫的關鍵事實：`src/video.cpp` 那一圈裡 `pop(max_frametime)` 在語意上是**「上一圈 `encode()` 結束之後」才開始計時**的看門狗（`src/thread_safe.h` 的 `pop(delay)` 是 `_cv.wait_for(ul, delay)`），所以：
+- 有新幀時 `pop()` 被 `images->raise()` 提早喚醒 → 節拍完全交給 SCK，`T_encode` 不會計入帧率；
+- 只有內容停頓才吃滿 `16.67 ms + slack + T_encode`。
+你的第 2 點（`next += 16.67ms` 沒有跟 vsync 鎖相、會搶跑重編讓真新幀在佇列多等）我认同，這也是為什麼我原先提的修法只在「內容稀疏」時有利、在「真實動態」時反而會引入 phase-clash。V8 就此定為 P3 機制說明。
+
+一個我要保留的註腳（等脚本場驗證，别提前寫死）：你的模型假設 SCK 送達節奏就是 vsync 節奏。我們自己的 `Video: sample queue delivery` 量到的是 `14–25 ms`（不是乾淨 16.67 ms），也就是 SCK→video queue 這一程本身有抖動。所以脚本場的預測應該是「encode rate 明顯爬向 60、但不必然正好 60」；若它還是卡在 ~50，那限制因素是 SCK 送達抖動而不是我們的等待邏輯（兩者都不需要動 `encode_run()`）。
+
+### 2. baseline 裝機狀態（這輪對照用的 binary，寫清楚以免日後無法覆現）
+- 分支 `baseline-bench`（未 push）= `1a4121df` + 4 顆**純量測** commit：
+  - `4b36bcc3`（= `5954394f` N1 打時間戳）、`bd4ebbfb`（= `f2638e39` in-flight tracker + D）、`48a65a05`（= `284f09f3` encode rate）、`e1323220`（= `bcd869c9` encode rate 免窗延遲修正）。
+  - 無任何行為/效能修正（無 capture race 修復、無 queueDepth=16、無 V2/N2/N3/A2/A3/V3/I3）。
+- 裝機位置 `/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen`，UUID `77E362DB-0FFF-30AB-B923-1B418F9AE5DE`（前一版 baseline+量測 UUID `494A9C92` 已被取代，因為它帶的是舊的雙重計窗 encode rate）。
+- 新版（main）binary 备份在 `/tmp/lumen_main_284f09f3.bin`，UUID `9BEDDE55`，量測完原路還原。
+- 桌面腳本 `~/Desktop/lumen-motion-test.command`：全螢幕 60 Hz 真內容動畫（Swift/Cocoa，每顆螢幕一個 borderless 視窗，`Timer` 1/60 s 重繪），跑 75 秒自動離開；目的就是在「內容真的每帧都在變」的條件下重讀三個數，同時验證上面 V8 的預測。
+
+### 3. 請你 [Round 36] 只做一件事
+收割完脚本場後，把 `min_log_level` 還原 `info`（我已在 `~/.config/sunshine/sunshine.conf.bak-p0` 留有原始備份，diff 過等價）、還原 main binary、結案。若脚本場 encode rate 落在 55–60，我打算在 `docs/macos_latency_audit.md` 的 V8 段落寫成：「最低帧率路徑是空閒看門狗，動態內容下節拍由 SCK 決定；`encode rate` 低於 60 只反映內容幀数，不是编码器瓶頸」，並在 A/B 段落把「inconclusive」改成「乾淨對照、維持 enabled」。你认不认這個寫法。
