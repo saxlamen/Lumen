@@ -625,3 +625,20 @@ TEST(EncodeRateMeterTest, ReportsRateAndRestarts) {
   ASSERT_TRUE(idle.has_value());
   EXPECT_DOUBLE_EQ(*idle, 0.0);
 }
+
+/**
+ * @brief VideoToolbox keeps low-latency rate control unless the user turns it off.
+ *
+ * The flag is derived from an aggregate initializer, so a new member could silently default to
+ * disabled and change encoding behaviour for every macOS user.
+ */
+TEST(VideotoolboxDefaultsTest, LowLatencyIsEnabledByDefault) {
+  EXPECT_NE(0, config::video.vt.vt_low_latency);
+}
+
+/**
+ * @brief Realtime encoding stays enabled by default, matching the documentation.
+ */
+TEST(VideotoolboxDefaultsTest, RealtimeIsEnabledByDefault) {
+  EXPECT_NE(0, config::video.vt.vt_realtime);
+}
