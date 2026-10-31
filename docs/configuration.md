@@ -3227,6 +3227,10 @@ supported on the current platform.
             every submit, disabled to never drain, or a decimal number N to drain once every N submits.
             A larger N leaves more frames in flight, which trades latency for throughput when the
             encoder cannot sustain the requested frame rate.
+            @note{A probe measurement of the encoder stage at 3840x2160 HEVC 10 bit took about 18 ms
+            per frame at 50 fps with enabled, about 33 ms at 57 fps with 2, about 49 ms at 59 fps
+            with 3, and about 67 ms at 60 fps with disabled. Lower resolutions usually have enough
+            headroom that enabled sustains the full frame rate.}
             @note{This option only applies when using macOS, and it is ignored by FFmpeg builds that
             do not provide the frame_drain encoder option.}
         </td>
