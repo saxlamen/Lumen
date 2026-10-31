@@ -649,3 +649,28 @@ TEST(VideotoolboxDefaultsTest, RealtimeIsEnabledByDefault) {
 TEST(VideotoolboxDefaultsTest, FrameDrainIsEnabledByDefault) {
   EXPECT_EQ(1, config::video.vt.vt_drain);
 }
+
+/**
+ * @brief A `frame_drain` entry that survives avcodec_open2() means the FFmpeg build lacks the option.
+ */
+TEST(FrameDrainSupportTest, ReportsALeftoverOptionAsUnsupported) {
+  AVDictionary *options {};
+  av_dict_set_int(&options, "realtime", 1, 0);
+  EXPECT_FALSE(video::detail::frame_drain_unsupported(options));
+
+  av_dict_set_int(&options, "frame_drain", 1, 0);
+  EXPECT_TRUE(video::detail::frame_drain_unsupported(options));
+
+  av_dict_free(&options);
+}
+
+/**
+ * @brief A null or empty dictionary is not treated as a missing encoder option.
+ */
+TEST(FrameDrainSupportTest, TreatsMissingOptionsAsSupported) {
+  EXPECT_FALSE(video::detail::frame_drain_unsupported(nullptr));
+
+  AVDictionary *options {};
+  EXPECT_FALSE(video::detail::frame_drain_unsupported(options));
+  av_dict_free(&options);
+}

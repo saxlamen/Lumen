@@ -2322,6 +2322,15 @@ namespace video {
       }
 
       // Successfully opened the codec
+      if (config::video.vt.vt_drain != 0 && detail::frame_drain_unsupported(options)) {
+        // Encoder reinitialisation must not turn one missing option into a warning per frame.
+        static bool frame_drain_reported {};
+        if (!frame_drain_reported) {
+          frame_drain_reported = true;
+          BOOST_LOG(warning) << "Video: FFmpeg ignored the frame_drain encoder option, so VideoToolbox latency is not optimized"sv;
+        }
+      }
+
       break;
     }
 
@@ -3814,6 +3823,10 @@ namespace video {
       if (frame_captured && img && !img->frame_timestamp) {
         img->frame_timestamp = capture_time;
       }
+    }
+
+    bool frame_drain_unsupported(const AVDictionary *remaining_options) {
+      return remaining_options != nullptr && av_dict_get(remaining_options, "frame_drain", nullptr, 0) != nullptr;
     }
   }  // namespace detail
 

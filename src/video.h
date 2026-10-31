@@ -821,6 +821,19 @@ namespace video {
     }
 
     /**
+     * @brief Check whether an FFmpeg build ignored the VideoToolbox frame-drain encoder option.
+     *
+     * avcodec_open2() consumes the options it recognises and leaves the rest in the dictionary, so a
+     * `frame_drain` entry that survives the call means this FFmpeg build has no such option. The
+     * latency improvement described by `vt_drain` is then silently inactive, which is worth reporting
+     * because the prebuilt dependency bundle and a locally patched build differ in exactly this way.
+     *
+     * @param remaining_options Option dictionary as it stands after avcodec_open2(), may be null.
+     * @return True when the dictionary still contains `frame_drain`.
+     */
+    bool frame_drain_unsupported(const AVDictionary *remaining_options);
+
+    /**
      * @brief Measures how many frames the encode loop actually submits per second.
      *
      * The refresh rate advertised to the client and the rate measured here differ when the encoder
