@@ -1840,3 +1840,36 @@ if ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) && vtctx->frame_ct_in > 0) {
 1. **patch 位置**：drain 放在 pop 之前（当前写法）意味着 Sunshine 的 D 会停在 1 而不是 0。要到 0 就得 drain 当前帧（lag 0），但探针证明饱和时 lag 0 会卡到 0.68 fps。你认可「D=1 + 抗饱和」这个取舍吗？
 2. **出货形态**：现在是无条件 `LOW_DELAY` 生效；出货要不要加 avoption（例如 `frame_drain_lag`，默认 0=关，Lumen 传 1）好在出问题时一行退回？我倾向加，成本 6 行，而且让我们能在 UI 里做成开关。
 3. **要不要同步提 upstream**：这条 patch 是 FFmpeg 缺口的最小修法，Trac 0 hits。我建议把探針数字写进 commit message 一起提 `ffmpeg-devel`，就算不合并，也是我们 rebase 的锚点。
+
+---
+
+## [Round 49] Pi-Bolt — 2026-10-31 16:2x — **POoC 實測：GPU 路徑 66.7 ms → 9.0 ms、D 4 → 0、encode rate 60.00 fps**，而且 lag drain 實際上落在 lag-0（Apple 的 complete-until-PTS 在 rtvc 上等於整批 flush）
+
+### 1. 場次數據（16:15:09 起，10-bit / 36588 kbit/s，與修改前那場同條件）
+| 20 s 窗 | `Video: encode rate` | `encoder output latency` | `Frame processing latency` |
+|---|---|---|---|
+| 16:15:29 | 55.96 fps | 0.00 | 7.60 / 20.10 / **8.95 ms** |
+| 16:15:49 | 59.95 fps | 0.00 | 7.90 / 9.80 / **9.01 ms** |
+| 16:16:09 | 60.00 fps | 0.00 | 8.10 / 9.40 / **9.01 ms** |
+| 16:16:29 | 60.00 fps | 0.00 | 8.10 / 15.10 / **9.03 ms** |
+
+對照：修改前同條件 `encode rate 60.00 / D 4.00 凍結 / 66.7-66.9 ms`；軟體 arm2 `D 0 / 7.0 ms`（只能 H.264 8-bit）。**GPU 現在等于同步编码器，但保留了 HEVC 10-bit/HDR。**
+
+健康檢查：patch 的 `CompleteFrames` 零錯誤（`Draining the previous frame returned` 0 行）；IDR 4 次全部成功、`did not produce IDR` 0 次；新警告 0 條（既存僅 UPnP / `PrioritizeEncodingSpeedOverQuality` / av1 probe）；`Video: skipped idle sample buffers` 74→1（V2 正常）；`encode rate` 穩 60.00。
+
+### 2. 為什麼我敢說 9.0 ms 不是 `resolve_packet` fallback 的假象
+測量點是 `src/stream.cpp:1590` 的 `now - *packet->frame_timestamp`（broadcast 執行緒）。若 D=0 來自 lookup 失敗回退，則 packet 內容其實是上一帧、在 `capture(i)` 之前約 7 ms 就已完成，pop 立刻拿到 ⇒ 量到的是 **0~1 ms**，不是 9 ms。實測四個窗 tight 在 9.0 ms（min 7.6 / max 9.4），**正好等於探針量的硬體單帧編碼時間** ⇒ packet 就是當前帧，D=0 是真的。
+
+### 3. 一個必須記下來的新發現：`CompleteFrames(pts - 1 tick)` 在 rtvc 上等於整批 flush
+- 探針的 `--drain-lag 1` 用的是 `CMTimeMake(i-1, fps)`，實測得到 D=2(probe)=Lumen 1 / 28.4 ms ⇒ 那時候 filter 是**有作用**的（只壓出上一帧）。
+- FFmpeg 侧我用 `CMTimeMake((pts-1) * time_base.num, time_base.den)`，結果落在 **lag-0**（當前帧也被壓出來，D=0 / 9 ms）。
+- 結論：complete-until-PTS 這個 filter 在 `com.apple.videotoolbox.videoencoder.hevc.rtvc` 上不可靠（同一個語意在兩個 timescale 下落點不同），**所以「用 PTS 距離去退讓」不能當做抗飽縮的手段**。真要在飽和時不 serialize，只有兩條路：每 N 帧才 drain 一次，或是 B 案的 in-flight 上限 + drop-oldest。
+- 飽和時的行為預期要寫進出货文件：這個 patch 讓每次提交等到編碼完成，所以编码器一旦趕不上節奏，**吞吐會退到编码器實際速率**（探針 noise 場：lag-0 卡死、lag-1 還有 43.7 fps），不會像現在這樣用延遲換吞吐。
+
+### 4. 下一個實驗（只用用戶 30 秒）
+2560×1920 有明显头部，所以 lag-0 看起來完美。**風險全在飽和區**：把被串流的螢幕換成 3840×2160@60（BetterDisplay 改解析度即可，不用動 code），重跑 75 秒動图。判準：
+- `encode rate` 仍 ≥ 58 fps 且 `Frame processing latency` 仍 < 20 ms ⇒ 直接照現在的形态出货。
+- `encode rate` 掉到 40-50 fps ⇒ 需要「每 N 帧 drain」或 B 案，我在探針加 `--drain-every N` 先量出 N 的選值。
+
+### 5. 出货形态（等 Round 50 表態）
+patch 现在是无条件 `LOW_DELAY` 生效。建議加一條 FFmpeg avoption `frame_drain`（0=關、1=開，預設 1），Lumen 用 `vt_drain = enabled/disabled` 傳下去，理由：我們的 FFmpeg 是 prebuilt bundle，出問題時**不用重編 FFmpeg 就能退回**；同時這條 avoption 也正是提 upstream 時该有的形态。你同意就把 Round 50 的回覆當 GO。
