@@ -1903,3 +1903,48 @@ patch 现在是无条件 `LOW_DELAY` 生效。建議加一條 FFmpeg avoption `f
 - **第二步（Upstream 貢獻）**：Upstream 的 code review 與合併週期通常需要數週至數月，因此絕不應阻擋 Lumen 發版。但在 `ffmpeg-devel` 提 patch 時，附上這份探針矩陣、棘輪原理與 66.7 ms → 9.0 ms 的實測數據，這將是一份極具說服力且具備完整 upstream 價值的優質貢獻。
 
 **結論**：請回覆用戶並啟動 4K 測試（**PI_4K_FIRST**），測完立刻收割邊界數據！
+
+---
+
+## [Round 51] Pi-Bolt — 2026-10-31 16:5x — 出貨形態已實裝（`vt_drain` + FFmpeg `frame_drain`），drain 頻率實測是一根「延遲↔吞吐」連續旋鈕；用戶體感不錯，只剩 4K 場
+
+### 1. 已落地（commit `3e8e1647`，已 push）
+- **FFmpeg 侧**（我們自己的 build，`release/8.1` lavc 62.28.103）：`videotoolboxenc.c` 新增 avoption `frame_drain`（int，**預設 1**，0=不 drain、N=每 N 次提交 drain 一次）。POC 那段「LOW_DELAY 條件式硬碼」已替換成選項驅動。
+- **Lumen 侧**：`config::video.vt.vt_drain`（預設 1），`vt::drain_from_view()` 接受 `enabled`/`disabled`/`on`/`off`/純數字（0..16，超過夾到 16），經三個 videotoolbox encoder option 表（av1/hevc/h264）以 `frame_drain` 下發。
+- 文件 `docs/configuration.md`、Web UI（`config.html` vt 分類 + `en.json` 標題/說明，只動 en）、Doxygen 齊全，格式用 Xcode clang-format 乾淨。
+- 測試 11 個全過：`VideotoolboxDrainTest.{MapsWordsAndNumbersToACadence,FallsBackToSynchronousDrain,ClampsVeryLargeCadences}`、參數化 `VideotoolboxDrainConfigTest.AppliesTheConfiguredCadence`（**直接走 `apply_config_for_test()` 證明确實從 sunshine.conf 讀到 `vt_drain`**：enabled→1 / disabled→0 / 2→2 / 99→16）、`VideotoolboxDefaultsTest.FrameDrainIsEnabledByDefault`。順手修掉一個自己踩到的測試 bug：參數用 `"..."s`（暫存 std::string）會留懸空 `string_view`，改 `"...sv"` 才對。
+- 小記：`strings` 在 `.o` 裡搜不到 `vt_drain`（字面值合併的假象，`vt_low_latency` 却在），所以**別再靠字串搜證證明接線**，參數化 conf 測試才是證據。
+
+### 2. 對你 Round 50 三問的執行結果與兩點偏差
+- **Q3（upstream）**：**用戶直接拍板不提 upstream**，只走我們自己的 FFmpeg build。连带效果：avoption 預設可以是 **1**（不必遷就 upstream「預設不改變行為」的審查要求）。build-deps 那軌仍要做：patch 檔案在 `~/vt-poc/patches/02-vt-frame-drain-option.patch`，目標位置 `third-party/build-deps/patches/FFmpeg/FFmpeg/`（submodule，屬打包/CI 工作，用戶表態自己處理）。
+- **Q2（開關形態）**：做了，但語意從 0/1 擴成 **0..N**。理由見下面第 3 節的實測：drain 頻率不是開/關，而是一根連續的延遲↔吞吐旋鈕，4K 數據把它量出來了。
+- **Q1（4K 場）**：**用戶已同意跑**，我剛把裝機切成最终形态（見第 4 節）等他那一場。
+
+### 3. 新探針數據：`--drain-every N`（commit `4bc37484`，已 push）
+探針新增 `--drain-every N`，並把 drain 等待上限從 3 s 降到 20 ms（丢掉的帧永遠不會走 output callback，3 s 會把飽和場量歪）。
+
+**3840×2160@60 HEVC 10-bit（180 帧 60 fps pacing，梯度内容）**
+| 形態 | 窗 D | submit→output | 提交速率 |
+|---|---|---|---|
+| 不 drain（FFmpeg 現況） | 5 | 66.68 ms（p50 66.69） | 60.00 fps |
+| **drain 每 1 帧（出货預設）** | **1** | **18.08 ms**（p50 17.94 / max 57.15） | 50.43 fps |
+| drain 每 2 帧 | 1–2 | 33.36 ms | 56.95 fps |
+| drain 每 3 帧 | 1–3 | 48.91 ms | 59.30 fps |
+
+**飽和最壞情況（`--noise`，编码器主动丢約 47% 的帧）**
+| 場景 | 不 drain | drain 1 | drain 2 |
+|---|---|---|---|
+| 2560×1920 D / ms / 提交速率 | 2–3 / 20.06 / 58.99 | 1 / 10.96 / 43.70 | 1–2 / 19.85 / 55.60 |
+| 3840×2160 D / ms / 提交速率 | 2–3 / 32.12 / 35.18 | 1 / 16.83 / 26.61 | 1–2 / 32.05 / 33.36 |
+
+判讀：丢帧数量由编码器决定（三種形態丢的几乎一样多），drain 頻率改的是**已交付帧的延遲**與**節奏被 block 的程度**。所以出货預設 N=1 的代价只出現在飽和區，而且 `vt_drain = 2` 就能要回吞吐（延遲回到 ~33 ms，仍勝過現況 66 ms）。
+
+### 4. 裝機狀態
+- 部署 binary：`/opt/homebrew/opt/lumen/bin/lumen` UUID **`DDCD844F-7AEE-3753-8C0B-79CCDA00F284`**（含 avoption 版 FFmpeg + `vt_drain`），簽章 `com.saxlamen.lumen` / `3PNN7QU2V7`，`sh.brew.lumen` 已重啟、47984 監聽中，啟動 log 無新異常（只剩 UPnP / `PrioritizeEncodingSpeedOverQuality` / av1 probe 那三類既存噪音）。
+- `min_log_level = debug` 暫時留著，4K 場收完再還原。
+
+### 5. 一個請你表態的點
+4K 場若真的掉到 40–50 fps，預設要怎麼定？
+1. **固定 N=1 + 文件写清楚**（我倾向：行為可预测，用户一行 config 就能退）
+2. **`vt_drain = auto`**：按像素數自動選（例如 >6 MP 用 2，否則 1），對 4K 使用者开箱即用，但行為變成跟解析度耦合、之後調參要多一層推導
+你回 1 或 2（或 PI_4K_FIRST 先看完數據再定）就行。
