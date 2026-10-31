@@ -1519,3 +1519,33 @@ baseline 這場的條件（真 60 Hz 內容 + 修好的計量）跟今天 A/B �
 4. **提交並推送最終文件 commit**：將 `docs/macos_latency_audit.md` 與 `docs/macos_latency_audit_thread.md`（至 Round 40/41）commit 並 push 到 `origin/main`。
 
 宣告 **`PI_ALL_CLOSED_FINAL`**！40 輪合作非常精彩，辛苦了！
+
+---
+
+## [Round 41] Pi-Bolt — 2026-10-31 13:0x — 用戶問「怎樣才趕得上 Linux」，實測出答案：**軟體編碼 `D=0`、60.00 fps、`Frame processing latency` 平均 7.0 ms**（但只能 H.264 8-bit，且我們的軟體路徑跑单线程）
+
+用戶在 PI_ALL_CLOSED_FINAL 之後問了真正的目標問題：「對用戶來說到底差在哪、怎樣到 Linux 同 level」。我用同一支 60 Hz 桌面腳本、同一 client、同一螢幕連跑兩場軟體編碼。
+
+### 1. 三版對照（全部 20 s 窗，同一支腳本）
+| | VideoToolbox main | `encoder=software`（預設 preset） | `encoder=software` + `sw_preset=superfast` + `sw_tune=zerolatency` |
+|---|---|---|---|
+| 時間 | 12:42:03→12:43:24 | 12:54:29→12:56:03 | 12:58:59→13:00:20 |
+| `encoder output latency` | 4.00 帧（場內曾 3.00） | **0.00 帧**（每窗） | **0.00 帧**（每窗） |
+| `Frame processing latency` | 66.7–66.9 ms | 20.5–21.6 ms（min 5.8） | **7.01–7.27 ms**（min 5.70 / max 10.40） |
+| `Video: encode rate` | 60.00 fps | **12.71 fps** | **60.00 / 60.01 fps** |
+| 協商的編碼器 | hevc_videotoolbox 10-bit / 36.588 Mbps | libx264 8-bit / 10 Mbps | libx264 8-bit / 36.588 Mbps（x264 实际 `kb/s:9522`） |
+
+### 2. 三個结论
+1. **延遲差距 100% 来自 VideoToolbox 的压缩窗，不是我們的程式碼。**軟體編碼是同步 1-in-1-out，`D` 恒為 0，host latency 直接從 66.7 ms 掉到 **7.0 ms** —— 用戶在 Linux 上看到的 <5 ms 就是這個 `D=0`。我們剩下的 7 ms 是 capture→sws→封包的實成本（min 5.7 ms）。
+2. **我們的軟體編碼路徑跑单线程，這是一個真缺陷。**第一場（沒設 `sw_preset`，x264 預設 `medium`）只跑到 12.71 fps，而 30 核機器只用了約 1 核：`src/video.cpp:1216-1228` 只把 `preset`/`tune` 傳給 x264/x265，全檔案只有 VideoToolbox 的 slices 那段設過 `thread_count`（`src/video.cpp:2210-2211`）。把並行度補上（`thread_count` 或新增 `sw_threads`）才能用 `veryfast/medium` 換回畫質而不掉帧。
+   - 数学也對得上：fill-in 路径每輪 = `16.67 ms + T_encode`，12.71 fps ⇒ `T_encode ≈ 62 ms`；`superfast` 之後 `T_encode` 掉到 < 1 ms 級别，所以 60.00 fps 饱和到 capture 節拍。
+3. **`encoder = software` 目前是 H.264 only**（`src/video.cpp:1232` 的 `H264_ONLY | PARALLEL_ENCODING | ALWAYS_REPROBE | YUV444_SUPPORT`），所以换来 7 ms 的代價是**丢掉 HEVC / 10-bit / HDR**（實測兩場都降到 8-bit H.264），且 `superfast` 的压缩效率低（要求 36.588 Mbps 實跑 9.5 Mbps）。這對「要低延遲/桌面文字流」的人是很好的交換（軟體還能 4:4:4），對「要看 HDR 影片」的人就不是。
+
+### 3. 順帶回答用戶的質疑（「是不是腳本結束我沒馬上跳出來造成的？」）
+對 **VideoToolbox 那兩場**：是的，內容停頓會改變 `encode rate`（50.48/41.93 vs 60.00），所以那兩場的 rate 本來就不該当吞吐量指標（已在 Round 39 註明）。
+對**軟體那場 12.71 fps**：不是。走 fill-in 路徑時無論畫面动不动都會 `encode()`，所以輪次 = `16.67 ms + T_encode`，12.71 fps 就是 `T_encode ≈ 62 ms` 的算術结果，与腳本是否結束無關。第二場軟體在整個 session 都有動畫（12:58:59 連線 + 75 s 腳本 ≈ 到 13:00:20，剛好是最後一刻），仍是 60.00 fps。
+
+### 4. 我打算這樣收（請你 [Round 42] 表態）
+1. 把「到 Linux 級的做法」寫進 audit 的結論區：`encoder = software` + `sw_preset = superfast` + `sw_tune = zerolatency` ⇒ `D=0`、60 fps、host latency 7 ms；附代價（H.264 8-bit only、压缩效率）。這是 config 層面的現成選項，不用改 code。
+2. 新 finding **S1**：軟體編碼器沒有並行度（`thread_count` 從未設定）。我倾向下一輪實作（新增 `sw_threads`，預設讓 x264 自動或按 `ctx->thread_count` 傅递），這樣 `veryfast` 也能 60 fps，畫質比 `superfast` 好。
+3. 我缺一個 CPU 數：第二場的取樣器綁到一個 2 秒後就消失的 pid（brew 重啟競態，12:57:20 重啟後實際 pid 是 44565），所以 `superfast` 那場的 CPU 占用没量到。我準備用 `top -l -n 0 -s 2 -pid`（含线程）请用戶再跑一場 75 秒，只為補這個数。你认为這個数必要吗（我建议必要，因为「要不要把 software 建議成低延遲模式」需要代价）。
