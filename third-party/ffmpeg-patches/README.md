@@ -35,17 +35,33 @@ Verified locally: the patch applies to FFmpeg `release/9.0` with line offsets on
 `build-deps` master pins, and to `release/8.1`, the 8.1 series (lavc 62.28.x) that the published
 bundle in use here was built from.
 
-1. In the fork put the file at `patches/FFmpeg/FFmpeg/videotoolbox/01-frame-drain.patch`.
-2. Add `cmake/ffmpeg/videotoolbox.cmake` that globs that directory and applies each file with
-   `APPLY_GIT_PATCH`, mirroring `cmake/ffmpeg/ffmpeg.cmake`, which today only globs
-   `patches/FFmpeg/FFmpeg/cbs/*.patch` and is gated on `BUILD_FFMPEG_ALL_PATCHES OR
-   BUILD_FFMPEG_CBS_PATCHES`. Introduce `BUILD_FFMPEG_VIDEOTOOLBOX_PATCHES` and honour
-   `BUILD_FFMPEG_ALL_PATCHES` so a plain build keeps getting every patch.
-3. Rebuild and publish `Darwin-arm64-ffmpeg.tar.gz` on a new tag, **keeping every external encoder
-   the upstream bundle enables** (x264, x265, SVT-AV1). A minimal local FFmpeg rebuild that drops
-   them, as the proof of concept did, silently removes `encoder = software`.
-4. Point the Lumen submodule at the fork and bump it to the tagged commit; nothing else in Lumen
-   changes.
+Create the fork at <https://github.com/LizardByte/build-deps/fork>; nothing is published from
+`LizardByte/build-deps` by hand, so a fork is the only way to get a bundle that carries a patch.
+
+1. `build-deps/` in this directory mirrors the fork layout, so copy its contents into the fork root.
+   That lands `patches/FFmpeg/FFmpeg/videotoolbox/01-frame-drain.patch` and
+   `cmake/ffmpeg/videotoolbox.cmake`. The cmake file only applies patches, because there is no extra
+   library to build here.
+2. Add the two hooks that make the component reachable. `cmake/ffmpeg/_main.cmake` includes one file
+   per component and only then includes `ffmpeg.cmake`, which creates the configure and build targets:
+   - `CMakeLists.txt`: `option(BUILD_FFMPEG_VIDEOTOOLBOX_PATCHES "Apply FFmpeg VideoToolbox patches" ON)`
+     beside the other patch options. `ffmpeg.cmake` applies its own patches under
+     `BUILD_FFMPEG_ALL_PATCHES OR BUILD_FFMPEG_CBS_PATCHES`, and every existing option defaults to
+     `ON`, so an `OFF` default would quietly skip this patch.
+   - `cmake/ffmpeg/_main.cmake`: `if(APPLE) include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ffmpeg/videotoolbox.cmake) endif()`
+     before the `ffmpeg.cmake` include.
+3. Push to `master`, or run the `CI` workflow manually. CI builds the `Darwin-arm64` matrix entry and
+   publishes `Darwin-arm64-ffmpeg.tar.gz` on a generated release tag using `GITHUB_TOKEN`, which
+   works in a fork without extra secrets. **Keep every external encoder the upstream bundle enables**
+   (x264, x265, SVT-AV1): a minimal local FFmpeg rebuild that drops them, as the proof of concept
+   did, silently removes `encoder = software`.
+4. Point the Lumen submodule at the fork (`git config -f .gitmodules submodule.third-party/build-deps.url
+   <fork url>`, then `git submodule sync`) and bump it to the tagged commit.
+5. One Lumen side change is still required: `cmake/dependencies/ffmpeg.cmake` hard-codes
+   `FFMPEG_GITHUB_REPO` as `LizardByte/build-deps` when it builds the download URL, so a submodule
+   URL alone does not redirect the archive download. Either derive the repository from the
+   submodule's `origin` remote, or skip cmake entirely and hand the bundle to the build with
+   `-DFFMPEG_PREPARED_BINARIES=<path>` from the packaging recipe.
 
 Development-only shortcut, not a shipping form: build FFmpeg with the patch and configure Lumen with
 `-DFFMPEG_PREPARED_BINARIES=<path-to-bundle>`, which `cmake/dependencies/ffmpeg.cmake` honours. That
