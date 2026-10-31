@@ -68,6 +68,46 @@ Development-only shortcut, not a shipping form: build FFmpeg with the patch and 
 is how the 9.0 ms measurement was deployed, and it is also how a regression can be re-measured
 without touching the dependency pipeline.
 
+### Building the bundle without a fork (the current shipping form)
+
+`build-bundle.sh` in this directory produces the bundle on a macOS arm64 host:
+
+```sh
+third-party/ffmpeg-patches/build-bundle.sh
+```
+
+It uses the published archive as the base so `libx264.a`, `libx265.a`, `libSvtAv1Enc.a`, `libcbs.a`
+and their headers stay byte identical to what LizardByte publishes, rebuilds only FFmpeg from the
+commit the submodule pins with the patch applied, installs over the base, and then verifies that
+`frame_drain` is inside `libavcodec.a` and that `config.h` still reports `CONFIG_LIBX264`,
+`CONFIG_LIBX265`, `CONFIG_LIBSVTAV1` and `CONFIG_VIDEOTOOLBOX`. It prints the archive path, its
+SHA-256 and a `PROVENANCE.txt` next to it.
+
+Two traps the script already handles, worth knowing when the build breaks:
+
+- The published archive carries `x264.h` and `libx264.a` but **no `x264.pc`**, because upstream points
+  `PKG_CONFIG_PATH` at the x264 build tree instead. FFmpeg 9.0 checks libx264 through pkg-config, so
+  without a synthesized `.pc` configure stops at `ERROR: x264 not found using pkg-config`.
+- `BUILD_DEPS_TAG` and `FFMPEG_COMMIT` have to stay aligned with the submodule. The tag is what
+  `git -C third-party/build-deps describe --tags --exact-match` prints and the commit is that tag's
+  gitlink: `git -C third-party/build-deps ls-tree <tag> third-party/FFmpeg/FFmpeg`. Nothing fails when
+  they drift, the bundle is just quietly a different FFmpeg.
+
+Consume the result with `-DFFMPEG_PREPARED_BINARIES=<work>/bundle/ffmpeg`, which
+`cmake/dependencies/ffmpeg.cmake` honours; packaging can also download the produced archive as a
+release asset of this repository and point the same variable at the extracted copy.
+
+Measured on 2026-10-31 with the script as committed: `libavcodec` 63.1.101, identical to the published
+archive at tag `v2026.910.121303`, so there is no version drift; `libx264`, `libx265` and `libsvtav1`
+are present in the linked binary; a service start with the default configuration logs no `frame_drain`
+warning; and `encoder = software` reports `Found H.264 encoder: libx264 [software]`.
+
+One measurement trap cost an afternoon of confusion: encoder probe validation only succeeds where
+Screen Recording is granted. Running the binary by hand in a terminal fails **every** encoder probe,
+including VideoToolbox, because Screen Capture Studio TCC is declined and the AVFoundation fallback
+starts too late for the probe. Change encoder settings through the service and read the log, or the
+result says nothing about the encoder.
+
 ### Verification after the packaged bundle switches
 
 1. `encoder = software` still opens, proving x264/x265/SVT-AV1 survived the rebuild.
