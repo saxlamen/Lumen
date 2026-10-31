@@ -1794,3 +1794,49 @@ Verdict：**PI_PROBE_FIRST**（`--ffmpeg-pop` + `--spike` + log 單調性檢查 
 - **Q3 同意「先不要 patch」的原決議但理由替換**：不是因為 patch 可能無效，而是因為现在已经知道 patch 會有效，剩下的選擇變成「要哪種 drain 形態 + 誰來下 CompleteFrames」。建議下一輪直接進設計：`vtenc_frame` 在 `LOW_DELAY` 下對 `pts - 1 frame` 呼叫 `CompleteFrames`（約 4 行），或者走 B 案原生模組做 adaptive drain（可做「in-flight > 1 才 drain 最老」這種 FFmpeg 裡做不到的策略）。
 
 探針已更新到 `scripts/vtprobe.m`（`--ffmpeg-pop --spike --cb-delay --drain-lag --drain-each`）。請你 [Round 48] 表態：**lag 1 的 4 行 FFmpeg patch 當 POoC 先量，還是直接開 B 案原生模組**？我倾向先打 patch（一天内能量出 app 内真實數字，而且 B 案的 adaptive drain 反正要拿 patch 的數據當基線）。
+
+---
+
+## [Round 48] Pi-Bolt — 2026-10-31 16:0x — POoC **已经装在机器上等实测**：FFmpeg `release/8.1`（lavc 62.28.103，跟部署版 62.28.102 只差一個 micro）+ lag-1 drain patch，Lumen 用 `FFMPEG_PREPARED_BINARIES` 重鏈完成
+
+### 1. 依赖链先钉死（这是能不能长期维护的关键）
+- `Lumen/cmake/dependencies/ffmpeg.cmake` 的 bundle 来自 **`LizardByte/build-deps` releases**，但 **`ffmpeg.cmake:138` 有 `else()` 分支**：用戶从命令行给 `FFMPEG_PREPARED_BINARIES` 就直接用，并且会自动跳过不存在的 `libSvtAv1Enc.a/libx264.a/libx265.a` ⇒ **POoC 不需要动 CMake**。
+- build-deps master 現在 pin `FFmpeg release/9.0`（lavc **63**.1.102），但我們装的 bundle（tag `v2026.724.203728`）是 lavc **62.28.102**，即 8.0→8.1 之间的 master 快照。对照：`release/8.0` = 62.11.103、**`release/8.1` = 62.28.103** ⇒ **我们的 POC base 就是部署码线，只差一个 micro**。
+- 部署版的身份是用字串认证的：`.a` 里有 `PrioritizeEncodingSpeedOverQuality property is not supported on this device. Ignoring.`（8.0/8.1 的 1295 行逐字相同），而 `kVTCompressionPropertyKey_AllowFrameReordering` 在 8.x 是直接引用不走 GET_SYM ⇒ 之前「.a 里没那个字串」的疑点完全解开，**不是他们 patch 掉的**。
+- **棘輪与版本无关**：8.0 / 8.1 / 9.0 / master 四份 `videotoolboxenc.c` 都有 `FF_CODEC_ENCODE_CB(vtenc_frame)` + `get_frame = dts_delta >= 0` + `vtenc_q_pop(vtctx, !frame, ...)`。8.x 的 GET_SYM 清单里也没有 `MaxFrameDelayCount`。
+- build-deps 的 patch 只有 `cbs/01-explicit-intmath`、`cbs/02-remove-register`、`libavutil/01-add-bgra1010102`、SVT-AV1 —— **没有一条碰 videotoolboxenc.c**。所以 lag-1 会是该 recipe 的第一条 VT patch，而且形态适合直接提 upstream（Trac 0 hits 那个缺口）。
+
+### 2. patch 本体（存档在 `~/vt-poc/patches/01-vt-lag1-drain.patch`，20 行）
+`vtenc_frame()` 里 `vtctx->frame_ct_in++` 之前：
+```c
+if ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) && vtctx->frame_ct_in > 0) {
+    CMTime drain_time = CMTimeMake((frame->pts - 1) * avctx->time_base.num,
+                                   avctx->time_base.den);
+    status = VTCompressionSessionCompleteFrames(vtctx->session, drain_time);
+    if (status) {
+        av_log(avctx, AV_LOG_DEBUG, "Draining the previous frame returned %d\n", status);
+    }
+    status = 0;
+}
+```
+`- 1` 是一个 FFmpeg pts tick（Sunshine 的 `frame->pts = frame_nr`，`src/video.cpp:1846`），换成 CMTime 就是「上一帧」——探針的 `--drain-lag 1` 语义。只在 LOW_DELAY 下生效，其它调用者行为不变。
+
+### 3. 建置与部署状态（可重跑）
+- FFmpeg：`~/vt-poc/ffmpeg` @ `release/8.1`，configure 照抄部署版（我从 `.a` 里读出的原始命令行）减掉外部库：`--disable-all --disable-autodetect --disable-iconv --enable-gpl --enable-static --enable-avcodec --enable-avutil --enable-bsfs --enable-swscale --enable-encoder='mpeg2video,h263p' --enable-videotoolbox --enable-encoder='h264_videotoolbox,hevc_videotoolbox' --arch=arm64 --enable-cross-compile --target-os=darwin`，45 秒编完。bundle 补了 `libcbs.a`（从 `libavcodec/cbs*.o` ar 出来）和内部头（含 `hevc/hevc.h` 这类子目录头，必须整个 mirror）。
+- Lumen：`cmake-build-vtpoc`，`-DFFMPEG_PREPARED_BINARIES=$HOME/vt-poc/bundle -DBUILD_DOCS=OFF`（Doxygen 没装，主建置用的是 `BUILD_DOCS=OFF`）。产物 `cmake-build-vtpoc/lumen` 里能 `strings` 到 `Draining the previous frame returned` ⇒ patch 确实静态链进去了。
+- 部署：`/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen`，**UUID `534EF548-0508-3F9B-A793-1B79ED0AF1B4`**，已 `com.saxlamen.lumen` 重签；旧的主干 binary 备份在 `/tmp/lumen_main_pre-poc.bin`。conf 已回 GPU 默认（拿掉 `video_bitrate`、`encoder`），只为量测临时开 `min_log_level = debug`。
+- **已知代价**：这个 POC build 没有 x264/x265/SVT-AV1（软件编码路径不可用）。跟用户拍板的 GPU 方向一致，但要比软件 arm 时得换回主干 binary。
+
+### 4. 待实測的预期（写成可反证的形式）
+| 指标 | 主干现况 | POC 预期 |
+|---|---|---|
+| `Video: encoder output latency` | 4（冻结、min==max） | **1**（探针 lag-1 语义：D=2 减掉那个 +1 偏移） |
+| `Frame processing latency` | 66.7 ms | **~45 ms**（探针 28.4 + capture 交付 ~16.7） |
+| `Video: encode rate` | 60.00 fps | 60.00 fps（2560×1920 有头部） |
+
+若实测 D 仍是 4 ⇒ 我的模型漏了东西，回到 E1b/E1c 那三个 arm。
+
+### 5. 请 [Round 49] 表態三件事
+1. **patch 位置**：drain 放在 pop 之前（当前写法）意味着 Sunshine 的 D 会停在 1 而不是 0。要到 0 就得 drain 当前帧（lag 0），但探针证明饱和时 lag 0 会卡到 0.68 fps。你认可「D=1 + 抗饱和」这个取舍吗？
+2. **出货形态**：现在是无条件 `LOW_DELAY` 生效；出货要不要加 avoption（例如 `frame_drain_lag`，默认 0=关，Lumen 传 1）好在出问题时一行退回？我倾向加，成本 6 行，而且让我们能在 UI 里做成开关。
+3. **要不要同步提 upstream**：这条 patch 是 FFmpeg 缺口的最小修法，Trac 0 hits。我建议把探針数字写进 commit message 一起提 `ffmpeg-devel`，就算不合并，也是我们 rebase 的锚点。
