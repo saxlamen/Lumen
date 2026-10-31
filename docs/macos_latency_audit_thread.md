@@ -1402,3 +1402,39 @@ window 從 40 到 131 ms 都出現過，既不是固定帧數也不是固定時�
    - 因此等 75 秒腳本場收割完畢後，**請不要直接拿 `11:31` 的 `/tmp/lumen_main_284f09f3.bin` 覆蓋回去**（那樣裝機版會少掉 `bcd869c9`），而是在 `main` 分支重新 `ninja -C cmake-build-macos lumen` 編出含 `bcd869c9` 的最新 `main` binary，再安裝到 `/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen` 並補簽 `com.saxlamen.lumen`、還原 `min_log_level = info` 重啟服務、順手清理 `~/Desktop/lumen-motion-test.command` 與 `/tmp/lumen_main_284f09f3.bin`。
 
 等用戶跑完這 75 秒桌面腳本收割數據即可正式結案！
+
+---
+
+## [Round 37] Pi-Bolt — 2026-10-31 12:3x — 脚本場收割：**V8 預測完全命中（encode rate 穩 60.00 fps）**，baseline `D=3`、`Frame processing latency` 50.1–50.4 ms；另發現 app ID 會隨 build 漂移
+
+### 1. baseline 場（`77E362DB`，12:29:47 → 12:31:16，89 s，全螢幕 60 Hz 動畫腳本）
+| 20 s 窗 | `Video: encode rate` | `encoder output latency` | `Frame processing latency` |
+|---|---|---|---|
+| 1 | 57.19 fps | 0.00→3.00（爬升） | 26.20/100.40/51.42 ms |
+| 2 | 59.80 fps | 3.00 / 3.00 / 3.00 | 30.60/84.90/50.35 ms |
+| 3 | 59.85 fps | 3.00 / 3.00 / 3.00 | 31.90/82.20/50.35 ms |
+| 4 | **60.15 fps** | 3.00 / 3.00 / 3.00 | **13.60/87.20/50.07 ms** |
+
+IDR 錯誤 0；`~/Library/Logs/DiagnosticReports` 沒有新的 lumen crash（最新仍是 10-30 16:08 那三個舊檔）。
+
+### 2. 你的 V8 論證被數據完全证实（我原先的 SCK 抖動註腳是多餘的）
+`bcd869c9` 修好計窗之後第一個干净的 60 Hz 內容場，encode rate 直接鎖在 **59.80 / 59.85 / 60.15 fps**。也就是说：
+- 真實 60 Hz 內容下 `pop(16.67ms)` 從不 timeout，節拍完全交給 SCK vsync，`T_encode` 不計入帧率 → **你的 inactivity watchdog 定性完全正確**，我担心的 SCK 送達抖動（14–25 ms）没有變成瓶頸；
+- 之前 Arm A/B 的 50.48 / 41.93 fps 純粹是「手動拖動有停頓 → fill-in 路徑」，所以那兩個 fps 數不該拿来判斷任何編碼器吞吐量問題（我 Round 31 那張表把 encode rate 当成編碼器指標呈現，這個解讀現在要打折，文件裡我會改）。
+
+### 3. 一個更乾淨的物理關係（這場湊巧湊到完美）
+`D = 3.00 frames` @ 60.00 fps = **50.0 ms**，實測 `Frame processing latency` avg = **50.07 / 50.35 / 50.35 ms**。也就是在 baseline 上，capture→packet 的實測延遲**幾乎 100% 就是編碼器压缩窗**（3 個帧周期），其餘環節（SCK 送達、佇列、转换）加起來 < 0.5 ms 的均值貢獻。
+這也再次支持 V6/LOW_DELAY 的結論方向：要動延遲只能動 D，而我們已經用乾淨 A/B 证明 `vt_low_latency` 開關在本機不改變 D。
+
+### 4. 還缺一場才能回答用戶最初的問題「我們的改動有沒有讓數字變好」
+baseline 這場的條件（真 60 Hz 內容 + 修好的計量）跟今天 A/B 兩場（手動拖動 + 舊的雙重計窗）**不同條件**，不能直接比。我需要同一腳本、同一螢幕在 **main build** 上再跑一場 75 秒，才能同條件對比 baseline。预期：D 應仍是 2–3（今天 main 上出現過 2 和 3），latency ≈ D/60，我們的 P0/P1 修正本來就不在視頻延遲主路上（V2/N2/V3 是少做工，A2/N3 是音訊）。
+
+### 5. 順手發現的真實問題（不在延遲範圍，但要記錄）
+用戶剛剛「連不進去」，原因是 client 快取了 main build 算出的 app ID `958645192`：
+- main build 啟動 log：`Warning: Couldn't find app image at path [desktop.png]` → 找不到圖 → ID = hash(名稱 + 路名字串)
+- baseline build 啟動：**沒有該警告**（圖實際在 `/opt/homebrew/Cellar/lumen/1.0.0/lumen/assets/desktop.png`）→ ID = hash(名稱 + 圖檔 SHA-256) → **ID 变了**
+- `src/process.cpp:634-650` 的 ID 演算法本身沒問題，但 asset 解析結果會随安裝佈局/build 不同而改變，导致 client 端快捷方式失效（使用者必须重新掃描清單）。結案時我打算在 audit 的「已知行為」加一條，並建議（未實作）把 app 圖找不到時的 fallback 從「雜湊路字串」改成穩定來源，或讓資源目錄解析只用安裝前綴。
+
+### 6. 請你 [Round 38]
+1. 确认「同條件 main 場」要不要跑（我倾向跑，75 秒，因為用戶的問題就是 baseline vs 我們的版本）。
+2. 第 5 點的結案寫法（已知行為 + 不實作）你认不认；如果要實作，我建议只做「資源目錄解析統一」這一項，但這會改變現有 client 的 app ID（又是一次重新掃描），要用戶批准。
