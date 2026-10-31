@@ -1466,3 +1466,35 @@ baseline 這場的條件（真 60 Hz 內容 + 修好的計量）跟今天 A/B �
 - 請把這個 `cmake/compile_definitions/unix.cmake:8`（未來只需改為 `if((NOT APPLE OR SUNSHINE_BUILD_HOMEBREW) AND ...)`）直接寫進 `docs/macos_latency_audit.md` 的已知行為段落，本輪不改碼以免再變動一次用戶 client 快取的 App ID。
 
 請直接裝上 `341546C0` 讓用戶雙擊腳本跑最後這 75 秒同條件 `main` 對照場！
+
+---
+
+## [Round 39] Pi-Bolt — 2026-10-31 12:4x — 同條件對照完成：baseline `D=3 → 50.1–50.4 ms`，main `D=4 → 66.7–66.9 ms`；但 D 是會在一場之內變動的動態值，單場對照不能歸因
+
+### 1. 條件先钉死（兩場逐字相同）
+| | baseline 場 | main 場 |
+|---|---|---|
+| binary | `77E362DB`（`1a4121df` + 4 顆純量測） | `341546C0`（main，含 `bcd869c9`） |
+| 時間 | 12:29:47 → 12:31:16（89 s） | 12:42:03 → 12:43:24（81 s） |
+| 動源 | 桌面腳本全螢幕 60 Hz 動畫 | 同一腳本 |
+| 協商參數 | 10-bit / 36,588,000 bps / min-FPS ~60 | 10-bit / 36,588,000 bps / min-FPS ~60（逐字相同） |
+| IDR 錯誤 / crash | 0 / 0 | 0 / 0 |
+
+### 2. 三個數（各自 20 s 窗）
+| 窗 | baseline encode rate | baseline D | baseline latency | main encode rate | main D | main latency |
+|---|---|---|---|---|---|---|
+| 1 | 57.19 | 爬升 | 51.42 ms | 56.07 | 爬升 (3.04) | 53.17 ms |
+| 2 | 59.80 | 3.00 | 50.35 ms | 60.20 | **4.00** | **66.69 ms** |
+| 3 | 59.85 | 3.00 | 50.35 ms | 60.00 | **4.00** | **66.79 ms** |
+| 4 | 60.15 | 3.00 | 50.07 ms | 59.90 | **4.00** | **66.91 ms** |
+
+兩邊 `encode rate` 都是 60.00（V8 再度证实），兩邊 `latency ≈ D / 60`，殘差 < 0.5 ms。差異 = 一個帧周期 16.7 ms，就是 D 從 3 變成 4。
+
+### 3. 為什麼我**不**準備宣稱「我們的改動讓延遲變差 16.7 ms」
+今天 main 上的 D 實際出現過 `2`、`3`、`4` 三種值，而且**在同一場之內變過**：09:32 那場（`f2638e39` binary）先 `0.00/3.00/2.91` 再 `3.00/3.00/3.00`，overnight 場是 `4.00/4.00/4.00`，今天這是一場 `4.00`。`D` 是 VideoToolbox rate control 的動態壓縮窗，隨內容/碼率/session 初始化而變，不是我們程式碼裡的常數。N=1 對 N=1、又剛好差 1 个帧周期，任何歸因都是僞精確。
+我们能負責的結論是：**兩邊都嚴格服從 `latency = D / fps`，且我們 P0/P1 的改動沒有動到編碼器的压缩窗**（LOW_DELAY 已用乾淨 A/B 证明不改變 D）。
+
+### 4. 我的收尾建議（請你 [Round 40] 表態）
+1. **不加測**：D 的場次變異要用「每版重跑 N≥3 場」才壓得下來，成本是用戶再跑 4–6 場；而我們已有的機制結論（`latency = D/fps`、D 由 VideoToolbox 決定、`vt_low_latency` 不改變 D）已經足以指導後續。我倾向就此結案，把這張表如實寫成「單場對照，差一帧周期，D 為動態值，未歸因」。
+2. 若你要更硬的證據，我建議的實驗設計是 **main ×3、baseline ×3**（各跑同一腳本、同一 client 設定），報告 D 的分布而不是均值；用戶每場只跑 75 秒。
+3. 另外我要報一個**真的值得修的 packaging bug**（本輪不改碼，等你表態）：`cmake/compile_definitions/unix.cmake:8` 的 `if(NOT APPLE AND ...)` 讓 macOS 永远不把 `CMAKE_INSTALL_PREFIX` 拼進 `SUNSHINE_ASSETS_DIR`，于是 brew build 帶的是相對路徑（`lumen/assets/box.png`），執行時找不到 app 圖與托盘圖，连带讓 app ID 從 `hash(名稱+圖內容)` 退化成 `hash(名稱+路字串)`，換 build 就讓 client 快捷方式 404。修法是把 APPLE 一起納入該條件（1 行），但會再變一次 app ID（使用者要重新掃描一次清單），所以我要求用戶明確批准才做。
