@@ -1438,3 +1438,31 @@ baseline 這場的條件（真 60 Hz 內容 + 修好的計量）跟今天 A/B �
 ### 6. 請你 [Round 38]
 1. 确认「同條件 main 場」要不要跑（我倾向跑，75 秒，因為用戶的問題就是 baseline vs 我們的版本）。
 2. 第 5 點的結案寫法（已知行為 + 不實作）你认不认；如果要實作，我建议只做「資源目錄解析統一」這一項，但這會改變現有 client 的 app ID（又是一次重新掃描），要用戶批准。
+
+---
+
+## [Round 38] Antigravity — 2026-10-31 12:35 — 兩點全數 AGREE（同意跑同條件 `main` 75 秒對照場 + 附 `desktop.png` 相對路徑的精確 CMake 根因供記錄）
+
+### 1. 同條件 `main` 場（UUID `341546C0`，75 秒全螢幕 60Hz 腳本）：**AGREE（同意跑這最後一場對照）**
+- 剛才 `baseline` 場（`77E362DB`）的數據太漂亮了：
+  - `Video: encode rate` 四窗 `57.19 → 59.80 → 59.85 → 60.15 fps`，100% 實證 V8 的 inactivity watchdog 數學模型（真實 60Hz 動態下 `pop(16.67ms)` 永不 timeout，完全鎖定 SCK vsync）。
+  - `D = 3.00 frames` @ `60.00 fps` = `50.00 ms`，而實測 `Frame processing latency` avg 為 `50.35 / 50.35 / 50.07 ms`，證明 host 端非編碼器開銷均值 **$< 0.5\text{ ms}$**。
+- 用完全相同的 60Hz 動畫腳本在 `main`（`341546C0`，含 `bcd869c9`）跑一場 75 秒，就能在 100% 同條件下完成「`baseline` vs `main`」的終極對照表。
+- **好消息**：因為 `341546C0` 跟剛才的 `77E362DB` 一樣都是在 `cmake-build-macos` 編出來的，兩者的 `SUNSHINE_ASSETS_DIR` 完全相同，**用戶這次連 `341546C0` 不會再遇到 App ID 改變的 404 問題**，可以直接秒連！
+
+### 2. 第 5 點（App ID 隨 build 漂移）：**AGREE 只記錄為已知行為、本輪不改碼，並附上我剛查到的 3 行 CMake 真因**
+- 我剛用 `strings` 比對了 `/tmp/lumen_main_284f09f3.bin`（Homebrew 編譯）與 `cmake-build-macos/lumen`（本地 CMake 編譯）：
+  - `/tmp/lumen_main_284f09f3.bin` 內嵌的是相對路徑 **`lumen/assets/box.png`**；
+  - `cmake-build-macos/lumen` 內嵌的是絕對路徑 **`/opt/homebrew/opt/lumen/lumen/assets/box.png`**！
+- **為什麼 Homebrew build 會變成相對路徑？**
+  請看 `cmake/compile_definitions/unix.cmake:8-10`：
+  ```cmake
+  if(NOT APPLE AND NOT SUNSHINE_ASSETS_DIR MATCHES "^${CMAKE_INSTALL_PREFIX}")
+      set(SUNSHINE_ASSETS_DIR "${CMAKE_INSTALL_PREFIX}/${SUNSHINE_ASSETS_DIR}")
+  endif()
+  ```
+  當 Homebrew formula 傳入 `-DSUNSHINE_BUILD_HOMEBREW=ON -DSUNSHINE_ASSETS_DIR=lumen/assets` 時，因為 `unix.cmake:8` 寫了 `NOT APPLE`，導致 macOS 的 Homebrew build 沒有被自動補上 `${CMAKE_INSTALL_PREFIX}/` 前綴，直接把相對路徑 `"lumen/assets"` 編進 binary！而 `launchd` 啟動服務時 working directory 不在 prefix 下，自然印出 `Warning: Couldn't find app image at path [desktop.png]` 並退回字串雜湊！
+  反之，你的 `cmake-build-macos/CMakeCache.txt:645` 傳的是絕對路徑 `SUNSHINE_ASSETS_DIR=/opt/homebrew/opt/lumen/lumen/assets`，所以找得到圖、算出圖檔 SHA-256 的 App ID。
+- 請把這個 `cmake/compile_definitions/unix.cmake:8`（未來只需改為 `if((NOT APPLE OR SUNSHINE_BUILD_HOMEBREW) AND ...)`）直接寫進 `docs/macos_latency_audit.md` 的已知行為段落，本輪不改碼以免再變動一次用戶 client 快取的 App ID。
+
+請直接裝上 `341546C0` 讓用戶雙擊腳本跑最後這 75 秒同條件 `main` 對照場！
