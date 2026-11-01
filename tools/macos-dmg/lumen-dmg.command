@@ -47,13 +47,10 @@ echo "✅ session：$SESSION"
 
 # 2) 公證需要 Developer ID（Apple Development / Apple Distribution 都不行）
 if [ -n "$SIGN" ]; then
+  # 要的是引號裡的憑證名稱。find-identity 的第 2 欄是 SHA-1，拿去 --sign 只會得到一個看不見的身分。
   if [ -z "$IDENTITY" ]; then
     IDENTITY="$(security find-identity -p codesigning -v 2>/dev/null \
-      | awk '/"Developer ID Application:/ {print $2}' | head -1)"
-  fi
-  if [ -z "$IDENTITY" ]; then
-    IDENTITY="$(security find-identity -p codesigning -v 2>/dev/null \
-      | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+      | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)"
   fi
   if [ -z "$IDENTITY" ]; then
     echo "❌ keychain 裡沒有「Developer ID Application」憑證。要準備的是：(Account Holder 才能建)"
@@ -67,28 +64,42 @@ if [ -n "$SIGN" ]; then
     exit 1
   fi
   TEAM="${IDENTITY##*(}"; TEAM="${TEAM%%)}"
-  echo "✅ 簽名身分：$IDENTITY"
-  if ! security find-generic-password -s "com.apple.gke.notary.tool" -a "notarytool-password" >/dev/null 2>&1; then
-    echo "⚠️  鑰匙圈裡沒有 notarytool-password 设定檔，這次只會簽名、不會送公證。"
-    echo "    補法：xcrun notarytool store-credentials notarytool-password --apple-id ... --team-id $TEAM --password xxxx-xxxx-xxxx-xxxx"
-  else
+  echo "✅ 簽名身分：${IDENTITY}"
+  # 別去猜 notarytool 把設定檔存成哪個鑰匙圈項目，那是實作細節、查錯會誤報沒有；
+  # 直接叫 notarytool 用這個 profile 打一次 API，能不能用由它說。
+  if xcrun notarytool history --keychain-profile notarytool-password >/dev/null 2>&1; then
+    NOTARIZE="yes"
     echo "✅ 公證设定檔：notarytool-password（team ${TEAM}）"
+  else
+    NOTARIZE=""
+    echo "⚠️  notarytool-password 這個 profile 不能用（沒存或認證失敗），這次只簽名、不送公證。"
+    echo "    補法：xcrun notarytool store-credentials notarytool-password --apple-id ... --team-id ${TEAM} --password xxxx-xxxx-xxxx-xxxx"
   fi
   export APPLE_CODESIGN_IDENTITY="$IDENTITY"
 fi
 
+# 簽名身分是在 cmake configure 時期就被展開進 cmake_install.cmake 的（實查那三行寫死成 `--sign ""`），
+# 所以「只重打包」沒辦法把未簽名的 build 變成已簽名，一定要重新 configure。
+if [ -n "$SIGN" ] && [ "$STEP" = "dmg" ]; then
+  STEP="all"
+  echo "ℹ️  要簽名 → 改跑 cmake + build + dmg：只跑 --step=dmg 會拿到 --sign \"\"，然後報 no identity found"
+fi
+
 VERSION="$(cat "$REPO/LUMEN_VERSION" 2>/dev/null || echo unknown)"
-echo "版本：$VERSION    步驟：$STEP    簽名：${SIGN:+是}${SIGN:-否}"
+if [ -n "$SIGN" ]; then
+  if [ -n "$NOTARIZE" ]; then SIGN_TEXT="是（送公證）"; else SIGN_TEXT="是（只簽名，不送公證）"; fi
+else
+  SIGN_TEXT="否"
+fi
+echo "版本：${VERSION}    步驟：${STEP}    簽名：${SIGN_TEXT}"
 echo
 
 cd "$REPO" || exit 1
-ARGS=(--step="$STEP" --skip-tests)
+ARGS=(--step="${STEP}" --skip-tests)
 if [ -z "$SIGN" ]; then
   ARGS+=(--skip-codesign --skip-notarize)
-elif security find-generic-password -s "com.apple.gke.notary.tool" -a "notarytool-password" >/dev/null 2>&1; then
-  :  # 有公證设定檔 → 簽名 + 送公證
-else
-  ARGS+=(--skip-notarize)  # 只簽名；沒设定檔時 notarytool 一定失敗
+elif [ -z "$NOTARIZE" ]; then
+  ARGS+=(--skip-notarize)  # 沒有可用的 profile 時 notarytool 一定失敗，先別送
 fi
 
 ./scripts/macos_build.sh "${ARGS[@]}"
