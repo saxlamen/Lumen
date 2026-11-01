@@ -14,6 +14,15 @@ else()
             MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
 
     # Populate bundle resources in the build tree for local runs.
+    #
+    # This is a second copy of the vite output, and CPack later installs the bundle directory and
+    # assets/web separately, in two passes. Without an ordering the copy below can run before vite
+    # finishes, leaving the bundle holding stale web assets: pass one seals the codesign resources
+    # over one of the two copies, and pass two replaces it with the other because the source now
+    # looks newer, which notarization rejects as "the signature of the binary is invalid" on the
+    # main executable while codesign --verify passes, because the seal was fine when it was made.
+    # Unsigned builds never notice, since there is no seal to break.
+    add_dependencies(lumen web-ui)
     set(_bundle_resources_dir "$<TARGET_FILE_DIR:lumen>/../Resources")
     add_custom_command(TARGET lumen POST_BUILD
             COMMENT "Copying bundle resources to build tree"
