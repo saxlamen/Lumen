@@ -508,7 +508,17 @@
     "virtualhid_outdated_title": "libvirtualhid Driver Outdated",
     "virtualhid_required_desc": "Virtual HID Driver is selected, but it is not installed. Install it and activate a paid license, or choose a different gamepad driver in Input configuration.",
     "virtualhid_required_title": "Virtual HID Driver Is Not Installed",
-    "welcome": "Hello, Sunshine!"
+    "welcome": "Hello, Sunshine!",
+    "macos_permissions_title": "Lumen still needs {count} macOS permission(s)",
+    "macos_permissions_desc": "Without them the stream stays black and input goes nowhere, and macOS never says why.",
+    "macos_permissions_open": "Open settings",
+    "macos_permissions_restart": "After granting: quit Lumen from the menu bar and open it again - a running process keeps the permissions it started with.",
+    "macos_permission": {
+      "screen_capture": "Screen Recording",
+      "accessibility": "Accessibility",
+      "input_monitoring": "Input Monitoring",
+      "full_disk_access": "Full Disk Access"
+    }
   },
   "navbar": {
     "applications": "Applications",

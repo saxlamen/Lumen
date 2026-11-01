@@ -121,33 +121,18 @@ namespace platf {
       };
     }  // namespace
 
-    int permission_guide(int argc, char *argv[]) {
-      bool grant = false;
-      int wait_seconds = 300;  // per permission: dragging into a list takes a while
-      std::string report_path;
-
-      for (int x = 0; x < argc; ++x) {
-        std::string arg {argv[x]};
-        if (arg == "--grant") {
-          grant = true;
-        } else if (arg.rfind("--wait=", 0) == 0) {
-          wait_seconds = std::atoi(arg.c_str() + 7);
-        } else if (arg == "--wait" && x + 1 < argc) {
-          wait_seconds = std::atoi(argv[++x]);
-        } else if (arg.rfind("--report=", 0) == 0) {
-          report_path = arg.substr(9);
-        } else if (arg == "--report" && x + 1 < argc) {
-          report_path = argv[++x];
-        } else {
-          std::cout << "usage: lumen --permissions [--grant] [--wait <seconds per item>] [--report <path>]"sv << std::endl;
-          return 2;
-        }
-      }
-      if (wait_seconds < 1) {
-        wait_seconds = 1;
-      }
-
-      std::vector<permission_t> permissions {
+    namespace {
+      /**
+       * @brief The one list of permissions Lumen needs, shared by every caller.
+       *
+       * The `permissions` command, the tray menu and the web UI banner all read this
+       * same list, so a permission cannot be described in one place and forgotten in
+       * another - and the order is the order a guide walks through.
+       *
+       * @return The permission list.
+       */
+      const std::vector<permission_t> &required_permissions() {
+        static const std::vector<permission_t> permissions {
         permission_t {
           "screen_capture",
           "capture the desktop for the video stream",
@@ -192,15 +177,84 @@ namespace platf {
           full_disk_access_allowed,
           [] {
           }
-        }
-      };
-
-      char executable_path[PATH_MAX] {};
-      uint32_t executable_size = sizeof(executable_path);
-      if (_NSGetExecutablePath(executable_path, &executable_size) != 0) {
-        executable_path[0] = '\0';
+        }        };
+        return permissions;
       }
-      std::string executable {executable_path};
+
+      /**
+       * @brief The executable this process was started from.
+       *
+       * macOS attributes permissions to that path (or its bundle), and Full Disk
+       * Access needs the user to drag exactly that file into a list.
+       *
+       * @return The path, or an empty string if the system would not say.
+       */
+      std::string current_executable() {
+        char executable_path[PATH_MAX] {};
+        uint32_t executable_size = sizeof(executable_path);
+        if (_NSGetExecutablePath(executable_path, &executable_size) != 0) {
+          executable_path[0] = '\0';
+        }
+
+        return std::string {executable_path};
+      }
+    }  // namespace
+
+    std::vector<permission_state_t> permission_status() {
+      std::vector<permission_state_t> status;
+      for (const auto &entry: required_permissions()) {
+        status.push_back(permission_state_t {entry.key, entry.purpose, entry.action, entry.pane, entry.granted()});
+      }
+
+      return status;
+    }
+
+    bool request_permission(const std::string &key) {
+      for (const auto &entry: required_permissions()) {
+        if (entry.key != key) {
+          continue;
+        }
+
+        entry.ask();
+        platf::open_url(entry.pane);
+        if (entry.key == "full_disk_access") {
+          reveal_installation(current_executable());
+        }
+
+        return true;
+      }
+
+      return false;
+    }
+
+    int permission_guide(int argc, char *argv[]) {
+      bool grant = false;
+      int wait_seconds = 300;  // per permission: dragging into a list takes a while
+      std::string report_path;
+
+      for (int x = 0; x < argc; ++x) {
+        std::string arg {argv[x]};
+        if (arg == "--grant") {
+          grant = true;
+        } else if (arg.rfind("--wait=", 0) == 0) {
+          wait_seconds = std::atoi(arg.c_str() + 7);
+        } else if (arg == "--wait" && x + 1 < argc) {
+          wait_seconds = std::atoi(argv[++x]);
+        } else if (arg.rfind("--report=", 0) == 0) {
+          report_path = arg.substr(9);
+        } else if (arg == "--report" && x + 1 < argc) {
+          report_path = argv[++x];
+        } else {
+          std::cout << "usage: lumen --permissions [--grant] [--wait <seconds per item>] [--report <path>]"sv << std::endl;
+          return 2;
+        }
+      }
+      if (wait_seconds < 1) {
+        wait_seconds = 1;
+      }
+
+      const auto &permissions = required_permissions();
+      std::string executable = current_executable();
 
       // Everything is echoed to the log as well: `open -na Sunshine --args
       // permissions` has no terminal attached, so stdout alone would be lost.

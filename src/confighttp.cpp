@@ -35,6 +35,10 @@
   #include <Windows.h>
 #endif
 
+#ifdef __APPLE__
+  #include "platform/macos/permissions.h"
+#endif
+
 // local includes
 #include "config.h"
 #include "confighttp.h"
@@ -1023,6 +1027,73 @@ namespace confighttp {
    *
    * @api_examples{/api/apps| GET| null}
    */
+  #ifdef __APPLE__
+  /**
+   * @brief Report the macOS permissions Lumen needs.
+   *
+   * Only this process can answer: macOS attributes a permission to whichever process
+   * asked for it, so a browser - or a script run from a terminal - would be reporting
+   * somebody else's permissions. The home page polls it, because the user is expected
+   * to go and flip switches while the page stays open.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getPermissions(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    nlohmann::json permission_list = nlohmann::json::array();
+    bool all_granted = true;
+    for (const auto &entry: platf::macos::permission_status()) {
+      permission_list.push_back({
+        {"key", entry.key},
+        {"purpose", entry.purpose},
+        {"action", entry.action},
+        {"pane", entry.pane},
+        {"granted", entry.granted},
+      });
+
+      all_granted &= entry.granted;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["permissions"] = permission_list;
+    output_tree["all_granted"] = all_granted;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Ask for one macOS permission and open the pane that governs it.
+   *
+   * A GET even though it does something: the server's own state is untouched - it
+   * prompts macOS and opens System Settings - and the granting happens in a window the
+   * browser cannot drive, so there is no server-side state for a CSRF token to defend.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void requestPermission(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    const auto query_params = request->parse_query_string();
+    const auto key_it = query_params.find("key");
+    if (key_it == query_params.end() || !platf::macos::request_permission(key_it->second)) {
+      nlohmann::json output_tree;
+      output_tree["status_code"] = SimpleWeb::StatusCode::client_error_bad_request;
+      output_tree["status"] = false;
+      output_tree["error"] = "Unknown permission";
+      send_response(response, output_tree);
+      return;
+    }
+
+    getPermissions(response, request);
+  }
+  #endif
+
   void getApps(const resp_https_t &response, const req_https_t &request) {
     if (!authenticate(response, request)) {
       return;
@@ -2356,6 +2427,10 @@ namespace confighttp {
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
 
     // rest api
+  #ifdef __APPLE__
+    server.resource["^/api/permissions/?$"]["GET"] = getPermissions;
+    server.resource["^/api/permissions/request/?$"]["GET"] = requestPermission;
+  #endif
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/apps$"]["POST"] = saveApp;

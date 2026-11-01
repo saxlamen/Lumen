@@ -71,6 +71,9 @@
   #endif
 
   // local includes
+  #ifdef __APPLE__
+    #include "src/platform/macos/permissions.h"
+  #endif
   #include "config.h"
   #include "confighttp.h"
   #include "display_device.h"
@@ -284,6 +287,29 @@ namespace system_tray {
   static auto virtualhid_license_menu = initial_virtualhid_license_menu();  ///< Virtual HID Driver license submenu.
   #endif
 
+  #ifdef __APPLE__
+  /**
+   * @brief Walk the user through the macOS permissions Lumen needs.
+   *
+   * macOS attributes a permission to the process that asks for it, so the guide has
+   * to run in this process rather than in a helper app or a script. It also waits up
+   * to several minutes per permission for the user to flip the switch, which is why
+   * it runs on its own thread: a menu callback that returns late leaves the menu
+   * open and unresponsive for the whole walk.
+   *
+   * @param item The clicked menu item.
+   */
+  void tray_permissions_cb([[maybe_unused]] struct tray_menu *item) {
+    BOOST_LOG(info) << "Opening the macOS permission guide from the system tray"sv;
+
+    std::thread([] {
+      char grant[] = "--grant";
+      char *guide_args[] = {grant};
+      platf::macos::permission_guide(1, guide_args);
+    }).detach();
+  }
+  #endif
+
   // Tray menu
   static struct tray tray = {
     .icon = TRAY_ICON,
@@ -292,6 +318,11 @@ namespace system_tray {
       (struct tray_menu[]) {
         // Tray menu labels currently use the project's English source strings.
         {.text = "Open Sunshine", .cb = tray_open_ui_cb},
+  #ifdef __APPLE__
+        // Without these four permissions Lumen streams a black screen and takes no
+        // input, and a first-time user has no way to find out that they are missing.
+        {.text = "Permissions", .cb = tray_permissions_cb},
+  #endif
         {.text = "-"},
   #ifdef _WIN32
         {.text = "Virtual HID Driver", .submenu = virtualhid_license_menu.data()},

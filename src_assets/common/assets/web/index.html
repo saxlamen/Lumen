@@ -49,6 +49,37 @@
       </div>
     </div>
 
+    <!-- macOS permissions -->
+    <div class="alert alert-warning my-4" v-if="missingMacosPermissions.length">
+      <div>
+        <div class="d-flex align-items-center mb-3">
+          <alert-triangle :size="32" class="icon-lg me-3"></alert-triangle>
+          <div>
+            <p class="mb-1"><strong>{{ $t('index.macos_permissions_title', { count: missingMacosPermissions.length }) }}</strong></p>
+            <p class="mb-0">{{ $t('index.macos_permissions_desc') }}</p>
+          </div>
+        </div>
+
+        <ul class="mb-3">
+          <li v-for="permission in missingMacosPermissions" :key="permission.key" class="mb-2">
+            <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+              <div>
+                <strong>{{ $t(`index.macos_permission.${permission.key}`) }}</strong>
+                <div class="small text-body-secondary">{{ permission.purpose }}</div>
+                <div class="small text-body-secondary">{{ permission.action }}</div>
+              </div>
+              <button class="btn btn-warning btn-sm flex-shrink-0" type="button" @click="requestMacosPermission(permission.key)">
+                <wrench :size="18" class="icon"></wrench>
+                {{ $t('index.macos_permissions_open') }}
+              </button>
+            </div>
+          </li>
+        </ul>
+
+        <p class="mb-0 small text-body-secondary">{{ $t('index.macos_permissions_restart') }}</p>
+      </div>
+    </div>
+
     <!-- Version -->
     <div class="card my-4">
       <div class="card-body" v-if="version">
@@ -185,6 +216,8 @@
         virtualhid: null,
         virtualhidLicense: null,
         vigembus: null,
+        permissions: null,
+        permissionTimer: null,
       }
     },
     async created() {
@@ -216,6 +249,19 @@
           } catch (e) {
             console.error("Failed to fetch Virtual HID Driver license status:", e);
           }
+        }
+
+        try {
+          // Lumen needs four macOS permissions and says nothing when they are off: the
+          // stream just stays black and input goes nowhere. Only the server can answer,
+          // because macOS attributes a permission to the process that asked for it.
+          const permissionStatus = await fetch("./api/permissions").then((r) => r.json());
+          this.permissions = permissionStatus.permissions;
+          if (!permissionStatus.all_granted) {
+            this.pollMacosPermissions();
+          }
+        } catch (e) {
+          console.error("Failed to fetch macOS permission status:", e);
         }
       } catch (e) {
         console.error(e);
@@ -294,6 +340,13 @@
         return this.version.version?.split(".").length === 5 &&
           this.version.version.indexOf("dirty") !== -1
       },
+      /** The macOS permissions that are still switched off. */
+      missingMacosPermissions() {
+        if (this.platform !== 'macos' || !this.permissions) {
+          return [];
+        }
+        return this.permissions.filter((permission) => !permission.granted);
+      },
       /** Parse the text errors, calculating the text, the timestamp and the level */
       fancyLogs() {
         if (!this.logs) return [];
@@ -307,6 +360,52 @@
       }
     },
     methods: {
+      /**
+       * Re-read the macOS permission list while the banner is up.
+       *
+       * The user is expected to leave this page, flip switches in System Settings and
+       * come back, so the banner has to notice on its own. The interval stops once
+       * everything is granted, which is also when the banner disappears.
+       */
+      pollMacosPermissions() {
+        if (this.permissionTimer) {
+          return;
+        }
+
+        this.permissionTimer = setInterval(async () => {
+          try {
+            const status = await fetch("./api/permissions").then((r) => r.json());
+            this.permissions = status.permissions;
+            if (status.all_granted) {
+              clearInterval(this.permissionTimer);
+              this.permissionTimer = null;
+            }
+          } catch (e) {
+            console.error("Failed to poll macOS permission status:", e);
+          }
+        }, 4000);
+      },
+      /**
+       * Ask macOS for one permission and open the pane that governs it.
+       *
+       * @param {string} key The permission's stable key, as reported by the server.
+       */
+      async requestMacosPermission(key) {
+        try {
+          await fetch(`./api/permissions/request?key=${encodeURIComponent(key)}`).then((r) => r.json());
+        } catch (e) {
+          console.error("Failed to request the permission:", e);
+        }
+
+        // Some permissions flip on the spot, so read the list again rather than making
+        // the user wait for the next poll to see that something already worked.
+        try {
+          const status = await fetch("./api/permissions").then((r) => r.json());
+          this.permissions = status.permissions;
+        } catch (e) {
+          console.error("Failed to refresh macOS permission status:", e);
+        }
+      },
       /**
        * Build a home-page notice for the current Windows virtual-input state.
        *
