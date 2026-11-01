@@ -72,6 +72,7 @@
 
   // local includes
   #ifdef __APPLE__
+    #include "src/platform/common.h"
     #include "src/platform/macos/permissions.h"
   #endif
   #include "config.h"
@@ -289,24 +290,45 @@ namespace system_tray {
 
   #ifdef __APPLE__
   /**
+   * @brief Ask for the next macOS permission that is switched off.
+   *
+   * This runs on the main queue on purpose. The calls that prompt for or register a
+   * permission are part of the app's UI layer: asking from a worker thread was
+   * measured to leave this process's menu bar item gone - the tray looked dead while
+   * the server kept running behind it - and the prompts themselves are app UI.
+   *
+   * @param context Unused.
+   */
+  void tray_permissions_request_next(void *context) {
+    (void) context;
+
+    for (const auto &entry : platf::macos::permission_status()) {
+      if (entry.granted) {
+        continue;
+      }
+
+      BOOST_LOG(info) << "Asking for a macOS permission from the system tray: "sv << entry.key;
+      platf::macos::request_permission(entry.key);
+      return;
+    }
+
+    BOOST_LOG(info) << "All macOS permissions Lumen needs are granted"sv;
+    platf::open_url("x-apple.systempreferences:com.apple.preference.security");
+  }
+
+  /**
    * @brief Walk the user through the macOS permissions Lumen needs.
    *
-   * macOS attributes a permission to the process that asks for it, so the guide has
-   * to run in this process rather than in a helper app or a script. It also waits up
-   * to several minutes per permission for the user to flip the switch, which is why
-   * it runs on its own thread: a menu callback that returns late leaves the menu
-   * open and unresponsive for the whole walk.
+   * macOS attributes a permission to the process that asks for it, so this has to
+   * happen in the server rather than in a script or a helper app. One permission per
+   * click, deliberately: System Settings reuses a single window, so asking for all
+   * four at once opens four panes on top of each other and leaves the user staring at
+   * whichever one happened to land last. Clicking again advances to the next one.
    *
    * @param item The clicked menu item.
    */
   void tray_permissions_cb([[maybe_unused]] struct tray_menu *item) {
-    BOOST_LOG(info) << "Opening the macOS permission guide from the system tray"sv;
-
-    std::thread([] {
-      char grant[] = "--grant";
-      char *guide_args[] = {grant};
-      platf::macos::permission_guide(1, guide_args);
-    }).detach();
+    dispatch_async_f(dispatch_get_main_queue(), nullptr, tray_permissions_request_next);
   }
   #endif
 
