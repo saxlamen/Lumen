@@ -194,13 +194,17 @@ namespace platf {
 
     void ask_missing_permissions() {
       for (const auto &entry : required_permissions()) {
-        // Screen Recording is left out: asking a live server for it makes AppKit tear
-        // the UI down while it waits for a relaunch the ask does not cause, and the
-        // capture path already asks for it during startup, before the tray exists.
-        if (entry.key == "screen_capture" || entry.granted()) {
+        if (entry.granted()) {
           continue;
         }
 
+        // Asking is the only way an application shows up in a System Settings list at all, so an
+        // permission nobody asks for is an empty pane rather than a missing switch. Screen
+        // Recording is asked here, and not from the tray or the web page, because this is the one
+        // moment it is safe to do so: the status item does not exist yet, so the AppKit teardown a
+        // Screen Recording request causes has nothing left to take away. The capture path only
+        // preflights the permission - measured as a "No screen capture permission!" line with no
+        // TCC row created for the bundle at all - so nothing else would register the app.
         entry.ask();
       }
     }
