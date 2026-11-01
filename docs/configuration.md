@@ -745,8 +745,15 @@ supported on the current platform.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            When enabled, Sunshine logs one-second macOS scrolling statistics. Set the
-            <code>LUMEN_SCROLL_DIAGNOSTICS=trace</code> environment variable for per-event tracing.
+            One of <code>disabled</code>, <code>enabled</code> or <code>trace</code>. When enabled,
+            Sunshine logs one-second macOS scrolling statistics. It also turns on the Scroll census
+            line, which counts scroll packets received from the client separately from the events
+            actually injected after packet batching, so a stutter can be traced to the client or to
+            host-side batching. <code>trace</code> additionally logs every scroll packet and every
+            injected event, which separates the client's delivery rhythm from the frames the host
+            inertia loop adds by itself. The <code>LUMEN_SCROLL_DIAGNOSTICS=trace</code> environment
+            variable turns tracing on as well, for cases where the configuration value cannot be
+            changed.
         </td>
     </tr>
     <tr>
@@ -758,7 +765,7 @@ supported on the current platform.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            macos_smooth_scrolling_diagnostics = enabled
+            macos_smooth_scrolling_diagnostics = trace
             @endcode</td>
     </tr>
 </table>

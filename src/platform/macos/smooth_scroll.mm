@@ -387,8 +387,10 @@ namespace platf::macos {
         pixel_remainder_x = 0.0;
       }
       const auto *diagnostics_value = std::getenv("LUMEN_SCROLL_DIAGNOSTICS");
-      scroll_diagnostics_enabled = config::input.macos_smooth_scrolling_diagnostics || diagnostics_value != nullptr;
-      scroll_diagnostics_trace = diagnostics_value != nullptr && std::string_view {diagnostics_value} == "trace";
+      const auto &diagnostics_mode = config::input.macos_smooth_scrolling_diagnostics;
+      scroll_diagnostics_enabled = diagnostics_mode != "disabled" || diagnostics_value != nullptr;
+      scroll_diagnostics_trace = diagnostics_mode == "trace" ||
+                                 (diagnostics_value != nullptr && std::string_view {diagnostics_value} == "trace");
       last_diagnostics_report = std::chrono::steady_clock::now();
       input_cadence_ms.store(0.0, std::memory_order_relaxed);
       release_threshold_ms.store(45.0, std::memory_order_relaxed);
@@ -397,6 +399,12 @@ namespace platf::macos {
       scroll_thread_stop.store(false, std::memory_order_relaxed);
       scroll_inertia_thread = std::thread(scroll_inertia_loop);
       scroll_thread_initialized = true;
+
+      if (scroll_diagnostics_enabled) {
+        // Announcing the mode once per session keeps trace verification independent of scrolling.
+        BOOST_LOG(info) << "macOS scroll diagnostics active: macos_smooth_scrolling_diagnostics=" << diagnostics_mode
+                        << ", per-event trace=" << (scroll_diagnostics_trace ? "yes" : "no");
+      }
     }
   }
 

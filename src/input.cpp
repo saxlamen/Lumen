@@ -2125,7 +2125,7 @@ namespace input {
      * @return True when census lines should be written.
      */
     bool scroll_census_enabled() {
-      static const bool enabled = config::input.macos_smooth_scrolling_diagnostics || std::getenv("LUMEN_SCROLL_DIAGNOSTICS") != nullptr;
+      static const bool enabled = config::input.macos_smooth_scrolling_diagnostics != "disabled" || std::getenv("LUMEN_SCROLL_DIAGNOSTICS") != nullptr;
       return enabled;
     }
 
