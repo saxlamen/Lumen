@@ -83,6 +83,20 @@ qt6_deploy_runtime_dependencies(
 
         fixup_bundle(\"\${_app}\" \"\" \"\")
 
+        # The bundle target's POST_BUILD step snapshots CMAKE_BINARY_DIR/assets into the bundle, so
+        # the installed bundle has two writers for Contents/Resources/assets/web: this snapshot and
+        # install(DIRECTORY .../assets/web). The vite output differs on every build, and the snapshot
+        # only refreshes when the executable is relinked, so the two copies disagree in an ordinary
+        # incremental build. This install script runs twice, and in the second pass the bundle
+        # directory install overwrites the freshly installed web assets, which after the first pass
+        # had already sealed them: notarization reports 'the signature of the binary is invalid' on
+        # the main executable, while codesign --verify --deep --strict passes because the seal was
+        # correct at the moment it was made. Unsigned builds never see it, there is no seal to break.
+        # Re-asserting the current assets here makes the last writer before signing deterministic, so
+        # the sealed bytes and the packaged bytes are always the same content.
+        file(COPY \"${CMAKE_CURRENT_BINARY_DIR}/assets/web/\"
+             DESTINATION \"\${_app}/Contents/Resources/assets/web\")
+
         # Remove Finder/resource-fork metadata that breaks codesign.
         execute_process(COMMAND /usr/bin/xattr -rc \"\${_app}\")
 
