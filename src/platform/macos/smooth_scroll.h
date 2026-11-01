@@ -20,14 +20,14 @@ namespace platf::macos {
    * direction reversals or idle gaps, and bounds the maximum coasting speed.
    *
    * @param current_velocity Previous axis velocity in pixels per second.
-   * @param delta_pixels Current event displacement in pixels.
+   * @param delta_pixels Current event displacement in pixels, fraction included.
    * @param sample_dt Elapsed seconds since the previous scroll event.
    * @param had_scroll Whether an active scroll gesture was already in progress.
    * @return Updated axis velocity in pixels per second.
    */
   double update_scroll_velocity(
     double current_velocity,
-    int32_t delta_pixels,
+    double delta_pixels,
     double sample_dt,
     bool had_scroll
   );

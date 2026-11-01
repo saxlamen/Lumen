@@ -5,12 +5,16 @@
 
 #include "src/platform/macos/smooth_scroll.h"
 
-#include <ApplicationServices/ApplicationServices.h>
+#import <ApplicationServices/ApplicationServices.h>
+#include <mach/mach_time.h>
+#include <array>
+#include <string>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <cstdlib>
 #include <mutex>
 #include <pthread.h>
@@ -26,8 +30,6 @@ namespace platf::macos {
     bool scroll_in_progress = false;
     double scroll_velocity_y = 0.0;
     double scroll_velocity_x = 0.0;
-    double pixel_remainder_y = 0.0;
-    double pixel_remainder_x = 0.0;
 
     std::mutex scroll_mutex;
     std::mutex event_mutex;
@@ -46,7 +48,36 @@ namespace platf::macos {
     std::atomic<double> input_cadence_ms {0.0};
 
     /// Idle time after which host-side inertia takes over, derived from ::input_cadence_ms.
-    std::atomic<double> release_threshold_ms {45.0};
+    std::atomic<double> release_threshold_ms {32.0};
+
+    /**
+     * @brief One scroll sample used to estimate velocity over a short window.
+     */
+    struct scroll_sample_t {
+      double dt;  ///< Seconds since the previous packet, zero for the first one.
+      double dy;  ///< Vertical delta in pixels.
+      double dx;  ///< Horizontal delta in pixels.
+    };
+
+    /**
+     * @brief The most recent scroll samples, newest at the back.
+     *
+     * A fast flick arrives as 28-90px packets. Dividing one of those by its own 4-9ms gap reaches
+     * 14000 pixels per second, and half of all packets pinned against the velocity ceiling as a
+     * result. Averaging over roughly the last 80ms first keeps a single large packet from deciding
+     * how the inertia starts.
+     */
+    std::deque<scroll_sample_t> scroll_samples;
+
+    /**
+     * @brief Sub-pixel remainders held back from the integer pixel field.
+     *
+     * The exact motion travels in the fixed-point fields, but applications that read only the
+     * pixel field must still receive the whole distance, so whatever an event cannot report as a
+     * whole pixel is carried into the next event on the same axis.
+     */
+    double point_carry_y = 0.0;
+    double point_carry_x = 0.0;
     bool scroll_thread_initialized = false;
 
     /**
@@ -66,6 +97,17 @@ namespace platf::macos {
       std::atomic<uint64_t> interval_max_us {0};  ///< Largest measured input interval.
       std::atomic<uint64_t> momentum_started {0};  ///< Number of host-side inertia phases.
       std::atomic<uint64_t> momentum_cancelled {0};  ///< Number of interrupted inertia phases.
+
+      /**
+       * @brief Interval histogram of inertia loop frames, in milliseconds.
+       *
+       * Buckets are <4, 4-8, 8-12, 12-16, 16-25, 25-33, 33-50, >50. Unlike ::output_interval_*,
+       * these samples come from the inertia loop alone, so idle time between gestures cannot
+       * stretch them and they show what the loop's pacing really is.
+       */
+      std::array<std::atomic<uint64_t>, 8> frame_buckets {};
+      std::atomic<uint64_t> frame_samples {0};
+      std::atomic<double> frame_max_ms {0.0};
     } scroll_diagnostics;
     bool scroll_diagnostics_enabled = false;
     bool scroll_diagnostics_trace = false;
@@ -95,6 +137,12 @@ namespace platf::macos {
       const auto interval_total_us = scroll_diagnostics.interval_total_us.exchange(0);
       const auto interval_max_us = scroll_diagnostics.interval_max_us.exchange(0);
       const auto momentum_started = scroll_diagnostics.momentum_started.exchange(0);
+      std::array<uint64_t, 8> frame_buckets {};
+      for (std::size_t bucket = 0; bucket < frame_buckets.size(); ++bucket) {
+        frame_buckets[bucket] = scroll_diagnostics.frame_buckets[bucket].exchange(0);
+      }
+      const auto frame_samples = scroll_diagnostics.frame_samples.exchange(0);
+      const auto frame_max_ms = scroll_diagnostics.frame_max_ms.exchange(0.0);
       const auto momentum_cancelled = scroll_diagnostics.momentum_cancelled.exchange(0);
       const auto average_interval_ms = interval_samples == 0
         ? 0.0
@@ -119,29 +167,71 @@ namespace platf::macos {
                       << " release_threshold_ms=" << release_threshold_ms.load(std::memory_order_relaxed)
                       << " momentum_started=" << momentum_started
                       << " momentum_cancelled=" << momentum_cancelled;
+
+      // Reported separately because a single line per second is what tells the loop's own pacing
+      // apart from the rate of events, which idle time between gestures otherwise blends in.
+      if (frame_samples > 0) {
+        std::string frame_report = "macOS inertia frames [" + std::to_string(frame_samples) +
+          " frames, ms <4/4-8/8-12/12-16/16-25/25-33/33-50/>50]:";
+        for (const auto bucket: frame_buckets) {
+          frame_report += " " + std::to_string(bucket);
+        }
+        frame_report += " max=" + std::to_string(static_cast<uint64_t>(frame_max_ms)) + "ms";
+        BOOST_LOG(info) << frame_report;
+      }
+    }
+
+    /**
+     * @brief Split off the whole-pixel part of a delta for the integer pixel field.
+     *
+     * @param delta Fractional pixel delta reported by this event.
+     * @param carry Remainder carried into the next event on the same axis.
+     * @return Whole pixels to report in the pixel field.
+     */
+    int32_t pixel_point_delta(double delta, double &carry) {
+      carry += delta;
+      const auto integral = static_cast<int32_t>(std::trunc(carry));
+      carry -= integral;
+      return integral;
     }
 
     /**
      * @brief Post a synthetic scroll event to the macOS HID event stream.
      *
-     * @param phase Scroll phase to attach to the event.
-     * @param momentum_phase Momentum phase to attach, or zero for a gesture event.
-     * @param delta_y Vertical pixel delta.
-     * @param delta_x Horizontal pixel delta.
+     * The exact delta, fraction included, travels in the fixed-point fields. Without them slow
+     * motion degenerates into one whole pixel every few frames, because a whole pixel only
+     * accumulates every 1/v seconds: at 25 pixels per second that is a 40ms step, which reads as
+     * stuttering. The whole-pixel part stays in the pixel field for applications that ignore the
+     * fixed-point fields, and nothing is lost there because the remainder is carried forward.
+     *
+     * These events deliberately carry no scroll or momentum phase. Tagging them was measured to
+     * remove the inertia tail entirely: the events still reached the HID tap, and views scrolled
+     * while the fields were left unset, but as soon as kCGScrollWheelEventScrollPhase and
+     * kCGScrollWheelEventMomentumPhase were populated the applications stopped moving. Phases are
+     * honoured for gestures the window server recognises on a multitouch device, which a posted
+     * event is not, so claiming them makes applications discard the motion.
+     *
+     * @param delta_y Vertical delta in pixels, fraction included.
+     * @param delta_x Horizontal delta in pixels, fraction included.
      */
-    void post_event(CGScrollPhase phase, CGMomentumScrollPhase momentum_phase, int32_t delta_y, int32_t delta_x) {
+    void post_event(double delta_y, double delta_x) {
+      // Measured through CoreGraphics: an event built with one line reports point delta 10 and
+      // fixed-point delta 1.0, and a pixel-unit event gets fixed = pixels / 10. The fixed-point
+      // fields are therefore line-scaled, and writing raw pixels into them would scroll ten times
+      // too far.
+      constexpr double PIXELS_PER_LINE = 10.0;
+
       std::lock_guard<std::mutex> lock(event_mutex);
       const auto post_start = std::chrono::steady_clock::now();
-      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, delta_y, delta_x);
+      const auto point_y = pixel_point_delta(delta_y, point_carry_y);
+      const auto point_x = pixel_point_delta(delta_x, point_carry_x);
+      CGEventRef event = CGEventCreateScrollWheelEvent(nullptr, kCGScrollEventUnitPixel, 2, point_y, point_x);
       if (!event) {
         return;
       }
       CGEventSetIntegerValueField(event, kCGScrollWheelEventIsContinuous, 1);
-      if (momentum_phase != 0) {
-        CGEventSetIntegerValueField(event, kCGScrollWheelEventMomentumPhase, momentum_phase);
-      } else {
-        CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, phase);
-      }
+      CGEventSetDoubleValueField(event, kCGScrollWheelEventFixedPtDeltaAxis1, delta_y / PIXELS_PER_LINE);
+      CGEventSetDoubleValueField(event, kCGScrollWheelEventFixedPtDeltaAxis2, delta_x / PIXELS_PER_LINE);
       CGEventPost(kCGHIDEventTap, event);
       CFRelease(event);
       if (scroll_diagnostics_enabled) {
@@ -170,25 +260,44 @@ namespace platf::macos {
         last_output_time = now;
       }
       if (scroll_diagnostics_trace) {
-        BOOST_LOG(info) << "macOS scroll trace: output phase=" << phase
-                        << " momentum_phase=" << momentum_phase
+        BOOST_LOG(info) << "macOS scroll trace: output"
                         << " dy=" << delta_y << " dx=" << delta_x;
       }
     }
 
     /**
-     * @brief Convert a high-resolution wheel delta while retaining fractional pixels.
+     * @brief Convert a high-resolution wheel delta into pixels.
      *
      * @param distance High-resolution wheel distance.
-     * @param remainder Fractional pixels retained between events.
-     * @return Integral pixel delta suitable for CGEvent.
+     * @return Pixel delta including its fraction, which the event fixed-point fields carry.
      */
-    int32_t to_pixel_delta(int32_t distance, double &remainder) {
+    double to_pixel_distance(int32_t distance) {
       constexpr double PIXELS_PER_TICK = 44.0;  // Slightly more sensitive than the default 40 pixels.
-      remainder += (static_cast<double>(distance) / 120.0) * PIXELS_PER_TICK;
-      const auto delta = static_cast<int32_t>(std::trunc(remainder));
-      remainder -= delta;
-      return delta;
+      return (static_cast<double>(distance) / 120.0) * PIXELS_PER_TICK;
+    }
+
+    /**
+     * @brief Nanoseconds per mach absolute time tick on this host.
+     *
+     * Apple Silicon reports 1, which makes mach absolute time plain nanoseconds.
+     */
+    double mach_nanoseconds_per_tick() {
+      static const mach_timebase_info_data_t timebase = [] {
+        mach_timebase_info_data_t info {};
+        mach_timebase_info(&info);
+        return info.denom == 0 || info.numer == 0 ? mach_timebase_info_data_t { .numer = 1, .denom = 1 } : info;
+      }();
+      return static_cast<double>(timebase.numer) / static_cast<double>(timebase.denom);
+    }
+
+    /**
+     * @brief Convert milliseconds to mach absolute time ticks.
+     *
+     * @param milliseconds Duration to convert.
+     * @return The same duration in mach absolute time units.
+     */
+    uint64_t milliseconds_to_mach_ticks(double milliseconds) {
+      return static_cast<uint64_t>(milliseconds * 1'000'000.0 / mach_nanoseconds_per_tick());
     }
 
     void scroll_inertia_loop() {
@@ -198,6 +307,26 @@ namespace platf::macos {
 
       // Host-side fallback for clients that do not generate inertia themselves.
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
+      if (scroll_diagnostics_enabled) {
+        // One-off calibration of what this thread can actually achieve, taken at startup before
+        // anything is streaming, so the number separates "this process cannot be woken on time"
+        // from "the stream load is delaying us". An 8ms deadline was chosen because that is the
+        // frame period the inertia loop asks for.
+        std::array<double, 16> oversleep_ms {};
+        auto deadline = mach_absolute_time() + milliseconds_to_mach_ticks(8.0);
+        for (auto &sample: oversleep_ms) {
+          mach_wait_until(deadline);
+          const auto now = mach_absolute_time();
+          sample = static_cast<double>(now - deadline) * mach_nanoseconds_per_tick() / 1'000'000.0;
+          deadline = now + milliseconds_to_mach_ticks(8.0);
+        }
+        std::sort(oversleep_ms.begin(), oversleep_ms.end());
+        BOOST_LOG(info) << "macOS inertia timer calibration [16 x 8ms mach_wait_until, this thread]"
+                        << " median_oversleep=" << oversleep_ms[oversleep_ms.size() / 2]
+                        << "ms p95=" << oversleep_ms[oversleep_ms.size() - 2]
+                        << "ms max=" << oversleep_ms.back() << "ms";
+      }
       while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
         report_scroll_diagnostics(std::chrono::steady_clock::now());
 
@@ -241,7 +370,15 @@ namespace platf::macos {
         }
         double pending_y = 0.0;
         double pending_x = 0.0;
-        auto previous_frame = std::chrono::steady_clock::now();
+
+        // Mach absolute time rather than std::chrono, because the wait itself is a Mach timer
+        // deadline. A relative nanosleep of 8ms measured a median of 10ms on this host with a p95
+        // of 24ms, and std::this_thread::sleep_until reached an 8ms average only by posting the
+        // missed frames back to back, which a scroll view collapses into a single jump.
+        const auto frame_ticks = milliseconds_to_mach_ticks(static_cast<double>(FRAME_DURATION.count()));
+        const auto nanoseconds_per_tick = mach_nanoseconds_per_tick();
+        auto previous_ticks = mach_absolute_time();
+        auto next_ticks = previous_ticks + frame_ticks;
         while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
           lock.lock();
           const bool interrupted = scroll_in_progress;
@@ -253,9 +390,24 @@ namespace platf::macos {
             break;
           }
 
-          const auto now = std::chrono::steady_clock::now();
-          const auto elapsed = std::chrono::duration<double>(now - previous_frame).count();
-          previous_frame = now;
+          const auto now_ticks = mach_absolute_time();
+          const auto elapsed = static_cast<double>(now_ticks - previous_ticks) * nanoseconds_per_tick / 1'000'000'000.0;
+          previous_ticks = now_ticks;
+
+          if (scroll_diagnostics_enabled) {
+            const auto elapsed_ms = elapsed * 1000.0;
+            constexpr std::array<double, 7> BUCKET_EDGES {{4.0, 8.0, 12.0, 16.0, 25.0, 33.0, 50.0}};
+            std::size_t bucket = 0;
+            while (bucket < BUCKET_EDGES.size() && elapsed_ms >= BUCKET_EDGES[bucket]) {
+              ++bucket;
+            }
+            scroll_diagnostics.frame_buckets[bucket].fetch_add(1, std::memory_order_relaxed);
+            scroll_diagnostics.frame_samples.fetch_add(1, std::memory_order_relaxed);
+            auto previous_max = scroll_diagnostics.frame_max_ms.load(std::memory_order_relaxed);
+            while (previous_max < elapsed_ms && !scroll_diagnostics.frame_max_ms.compare_exchange_weak(
+                     previous_max, elapsed_ms, std::memory_order_relaxed)) {
+            }
+          }
           velocity_y *= std::exp(-FRICTION_PER_SECOND * elapsed);
           velocity_x *= std::exp(-FRICTION_PER_SECOND * elapsed);
           if (std::abs(velocity_y) < MIN_VELOCITY && std::abs(velocity_x) < MIN_VELOCITY) {
@@ -264,19 +416,28 @@ namespace platf::macos {
 
           pending_y += velocity_y * elapsed;
           pending_x += velocity_x * elapsed;
-          const auto step_y = static_cast<int32_t>(std::trunc(pending_y));
-          const auto step_x = static_cast<int32_t>(std::trunc(pending_x));
-          pending_y -= step_y;
-          pending_x -= step_x;
-          if (step_y != 0 || step_x != 0) {
-            post_event(static_cast<CGScrollPhase>(0), static_cast<CGMomentumScrollPhase>(0), step_y, step_x);
+          if (pending_y != 0.0 || pending_x != 0.0) {
+            post_event(pending_y, pending_x);
           }
-          std::this_thread::sleep_for(FRAME_DURATION);
+          pending_y = 0.0;
+          pending_x = 0.0;
+          mach_wait_until(next_ticks);
+          next_ticks += frame_ticks;
+
+          // Never try to make up missed frames by posting several events at once: a scroll view
+          // receiving two events in the same millisecond renders one jump of their sum, which is
+          // the stutter this loop exists to remove. Any lateness therefore re-anchors the schedule
+          // and skips the missed frames, while the elapsed-based decay above keeps the distance.
+          // Tolerating lateness of up to one frame instead still posted pairs of events with a 0ms
+          // gap, which measured 11% of all intervals.
+          if (const auto wake_ticks = mach_absolute_time(); next_ticks <= wake_ticks) {
+            next_ticks = wake_ticks + frame_ticks;
+          }
         }
       }
     }
 
-    void post_pixel_scroll(int32_t delta_y, int32_t delta_x) {
+    void post_pixel_scroll(double delta_y, double delta_x) {
       std::unique_lock<std::mutex> lock(scroll_mutex);
       const auto now = std::chrono::steady_clock::now();
       const bool has_previous_input = last_input_time.time_since_epoch().count() != 0;
@@ -311,11 +472,45 @@ namespace platf::macos {
         const auto previous_cadence_ms = input_cadence_ms.load(std::memory_order_relaxed);
         const auto smoothed_cadence_ms = previous_cadence_ms == 0.0 ? sample_ms : previous_cadence_ms * 0.75 + sample_ms * 0.25;
         input_cadence_ms.store(smoothed_cadence_ms, std::memory_order_relaxed);
-        release_threshold_ms.store(std::clamp(smoothed_cadence_ms * 2.2, 45.0, 100.0), std::memory_order_relaxed);
+        // The floor sets how long the picture holds still after a flick is released, because
+        // nothing is injected while waiting to learn whether the gesture ended. Measured client
+        // packet gaps sit at 8ms with almost nothing between 12ms and 33ms, so 32ms stays clear
+        // of streaming jitter while cutting the frozen window from about 119ms to 42ms.
+        release_threshold_ms.store(std::clamp(smoothed_cadence_ms * 2.2, 32.0, 100.0), std::memory_order_relaxed);
       }
 
-      scroll_velocity_y = update_scroll_velocity(scroll_velocity_y, delta_y, sample_dt, had_scroll);
-      scroll_velocity_x = update_scroll_velocity(scroll_velocity_x, delta_x, sample_dt, had_scroll);
+      // A new gesture starts a fresh window; a gesture gap in the middle of a stream keeps it.
+      if (!had_scroll || sample_dt <= 0.0 || sample_dt > 0.08) {
+        scroll_samples.clear();
+      }
+      scroll_samples.push_back({sample_dt, delta_y, delta_x});
+      // Short on purpose. An 80ms window swallows about nine packets and averages away the speed
+      // the finger actually had at the end of the flick, which started the coast at half the
+      // speed of the last packets — still a brake, just a smaller one.
+      constexpr double VELOCITY_WINDOW_DT = 0.025;  // 25ms, two or three packets
+      constexpr std::size_t MAX_SAMPLES = 4;
+      double window_dt = 0.0;
+      while (!scroll_samples.empty() &&
+             (scroll_samples.size() > MAX_SAMPLES || window_dt + scroll_samples.front().dt > VELOCITY_WINDOW_DT)) {
+        window_dt += scroll_samples.front().dt;
+        scroll_samples.pop_front();
+      }
+
+      double window_dy = 0.0;
+      double window_dx = 0.0;
+      double window_total_dt = 0.0;
+      for (const auto &sample: scroll_samples) {
+        window_dy += sample.dy;
+        window_dx += sample.dx;
+        window_total_dt += sample.dt;
+      }
+
+      // The windowed velocity is fed back through the estimator as the distance this packet's gap
+      // would imply, so direction reversals, gesture resets and clamping keep working unchanged.
+      const auto window_velocity_y = window_total_dt > 0.0 ? window_dy / window_total_dt : 0.0;
+      const auto window_velocity_x = window_total_dt > 0.0 ? window_dx / window_total_dt : 0.0;
+      scroll_velocity_y = update_scroll_velocity(scroll_velocity_y, window_velocity_y * sample_dt, sample_dt, had_scroll);
+      scroll_velocity_x = update_scroll_velocity(scroll_velocity_x, window_velocity_x * sample_dt, sample_dt, had_scroll);
       const auto velocity_y = scroll_velocity_y;
       const auto velocity_x = scroll_velocity_x;
       scroll_in_progress = true;
@@ -323,14 +518,14 @@ namespace platf::macos {
 
       lock.unlock();
       if (scroll_diagnostics_trace) {
-        BOOST_LOG(info) << "macOS scroll trace: input phase=none"
+        BOOST_LOG(info) << "macOS scroll trace: input"
                         << " dy=" << delta_y << " dx=" << delta_x
                         << " interval=" << sample_dt * 1000.0 << "ms"
                         << " velocity_y=" << velocity_y
                         << " velocity_x=" << velocity_x
                         << " mode=host_inertia";
       }
-      post_event(static_cast<CGScrollPhase>(0), static_cast<CGMomentumScrollPhase>(0), delta_y, delta_x);
+      post_event(delta_y, delta_x);
       if (!had_scroll) {
         scroll_cv.notify_one();
       }
@@ -339,7 +534,7 @@ namespace platf::macos {
 
   double update_scroll_velocity(
     double current_velocity,
-    int32_t delta_pixels,
+    double delta_pixels,
     double sample_dt,
     bool had_scroll
   ) {
@@ -348,15 +543,18 @@ namespace platf::macos {
     constexpr double MAX_GESTURE_GAP_DT = 0.08;  // Reset stale momentum after >80ms idle gap.
     constexpr double FIRST_SAMPLE_WEIGHT = 0.35;
     constexpr double ALPHA = 0.55;
-    constexpr double MAX_VELOCITY = 2800.0;
+    // Measured release speeds on a fast trackpad flick reach 14000 pixels per second, and half of
+    // all packets exceeded the old 2800 ceiling, which started the coast at a third of the speed
+    // the page already had. That brake at the moment of release was visible as a hitch.
+    constexpr double MAX_VELOCITY = 14000.0;
 
     const bool fresh_gesture = !had_scroll || sample_dt <= 0.0 || sample_dt > MAX_GESTURE_GAP_DT;
-    if (delta_pixels == 0) {
+    if (delta_pixels == 0.0) {
       return fresh_gesture ? 0.0 : current_velocity;
     }
 
     if (fresh_gesture) {
-      const double initial_velocity = (static_cast<double>(delta_pixels) / NOMINAL_FIRST_SAMPLE_DT) * FIRST_SAMPLE_WEIGHT;
+      const double initial_velocity = (delta_pixels / NOMINAL_FIRST_SAMPLE_DT) * FIRST_SAMPLE_WEIGHT;
       return std::clamp(initial_velocity, -MAX_VELOCITY, MAX_VELOCITY);
     }
 
@@ -366,7 +564,7 @@ namespace platf::macos {
     }
 
     const double effective_dt = std::max(sample_dt, MIN_SAMPLE_DT);
-    const double instant_velocity = static_cast<double>(delta_pixels) / effective_dt;
+    const double instant_velocity = delta_pixels / effective_dt;
     // Scale down the blend factor for sub-frame packet bursts so coalesced network packets
     // cannot ratchet velocity up to the ceiling in a single millisecond.
     const double burst_scale = std::min(1.0, sample_dt / MIN_SAMPLE_DT);
@@ -378,13 +576,15 @@ namespace platf::macos {
   void init_smooth_scroll() {
     std::lock_guard<std::mutex> lock(lifecycle_mutex);
     if (!scroll_thread_initialized) {
+
       {
         std::lock_guard<std::mutex> state_lock(scroll_mutex);
         scroll_in_progress = false;
         scroll_velocity_y = 0.0;
         scroll_velocity_x = 0.0;
-        pixel_remainder_y = 0.0;
-        pixel_remainder_x = 0.0;
+        scroll_samples.clear();
+        point_carry_y = 0.0;
+        point_carry_x = 0.0;
       }
       const auto *diagnostics_value = std::getenv("LUMEN_SCROLL_DIAGNOSTICS");
       const auto &diagnostics_mode = config::input.macos_smooth_scrolling_diagnostics;
@@ -423,40 +623,29 @@ namespace platf::macos {
       scroll_in_progress = false;
       scroll_velocity_y = 0.0;
       scroll_velocity_x = 0.0;
-      pixel_remainder_y = 0.0;
-      pixel_remainder_x = 0.0;
+      scroll_samples.clear();
+      point_carry_y = 0.0;
+      point_carry_x = 0.0;
     }
     scroll_thread_initialized = false;
   }
 
   void scroll(int high_res_distance) {
-    int32_t delta_int;
-    {
-      std::lock_guard<std::mutex> lock(scroll_mutex);
-      if (!scroll_in_progress) {
-        pixel_remainder_y = 0.0;
-      }
-      delta_int = to_pixel_delta(high_res_distance, pixel_remainder_y);
-    }
-    if (delta_int == 0) {
+    const auto delta_pixels = to_pixel_distance(high_res_distance);
+
+    // Protocol noise below a hundredth of a pixel is not worth an event.
+    if (std::abs(delta_pixels) < 0.01) {
       return;
     }
-    post_pixel_scroll(delta_int, 0);
+    post_pixel_scroll(delta_pixels, 0.0);
   }
 
   void hscroll(int high_res_distance) {
-    int32_t delta_int;
-    {
-      std::lock_guard<std::mutex> lock(scroll_mutex);
-      if (!scroll_in_progress) {
-        pixel_remainder_x = 0.0;
-      }
-      delta_int = to_pixel_delta(high_res_distance, pixel_remainder_x);
-    }
-    if (delta_int == 0) {
+    const auto delta_pixels = to_pixel_distance(high_res_distance);
+    if (std::abs(delta_pixels) < 0.01) {
       return;
     }
-    post_pixel_scroll(0, delta_int);
+    post_pixel_scroll(0.0, delta_pixels);
   }
 
 }  // namespace platf::macos
