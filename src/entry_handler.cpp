@@ -18,6 +18,10 @@
 #include "network.h"
 #include "platform/common.h"
 
+#ifdef __APPLE__
+  #include "platform/macos/permissions.h"
+#endif
+
 extern "C" {
 #ifdef _WIN32
   #include <iphlpapi.h>
@@ -47,6 +51,19 @@ namespace args {
     http::save_user_creds(config::sunshine.credentials_file, argv[0], argv[1]);
 
     return 0;
+  }
+
+  int permissions(const char *name, int argc, char *argv[]) {
+#ifdef __APPLE__
+    (void) name;
+    return platf::macos::permission_guide(argc, argv);
+#else
+    std::cout << "The permissions command is only needed on macOS."sv << std::endl;
+    (void) name;
+    (void) argc;
+    (void) argv;
+    return 0;
+#endif
   }
 
   int help(const char *name) {

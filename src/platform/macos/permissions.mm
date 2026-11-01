@@ -1,0 +1,327 @@
+/**
+ * @file src/platform/macos/permissions.mm
+ * @brief Guided macOS permission checklist for the `permissions` command.
+ */
+
+// standard includes
+#include <cerrno>
+#include <chrono>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+// system includes
+#import <AppKit/AppKit.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <CoreFoundation/CoreFoundation.h>
+#include <fcntl.h>
+#import <IOKit/hidsystem/IOHIDLib.h>
+#include <mach-o/dyld.h>
+#include <unistd.h>
+
+// local includes
+#include "src/logging.h"
+#include "src/platform/common.h"
+#include "src/platform/macos/misc.h"
+#include "src/platform/macos/permissions.h"
+
+using namespace std::literals;
+
+namespace platf {
+  namespace macos {
+    namespace {
+      // The permission lists are addressed by their security preference anchors,
+      // which is the only supported way to land the user on the right one.
+      constexpr std::string_view k_pane_screen_capture {"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"};
+      constexpr std::string_view k_pane_accessibility {"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"};
+      constexpr std::string_view k_pane_input_monitoring {"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"};
+      constexpr std::string_view k_pane_full_disk_access {"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"};
+
+      /**
+       * @brief Full Disk Access has no query API, so probe a protected file.
+       *
+       * The system TCC database lives outside this process's container: without
+       * the permission the kernel answers EPERM rather than ENOENT, and with it the
+       * file opens normally. Anything else is reported as missing, because a
+       * permission we did not observe is not one worth claiming.
+       *
+       * @return True when this process can read files outside its container.
+       */
+      bool full_disk_access_allowed() {
+        int fd = ::open("/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+          ::close(fd);
+          return true;
+        }
+
+        return false;
+      }
+
+      /**
+       * @brief Ask macOS for Accessibility, which is what CGEvent posting needs.
+       *
+       * The prompt option both shows the dialog and registers this executable in
+       * the list, which is what makes the entry appear for the user to switch on.
+       */
+      void request_accessibility() {
+        const void *keys[] {kAXTrustedCheckOptionPrompt};
+        const void *values[] {kCFBooleanTrue};
+        auto options = CFDictionaryCreate(nullptr, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (options != nullptr) {
+          AXIsProcessTrustedWithOptions(options);
+          CFRelease(options);
+        }
+      }
+
+      /**
+       * @brief Reveal the app bundle, or the bare binary, in Finder.
+       *
+       * Full Disk Access has no add button, so the only way to register an app is
+       * to drag it into the list; this selects the thing to drag. A bundle's
+       * executable is not the thing, so the enclosing .app is selected instead.
+       *
+       * @param executable Path of the running executable.
+       */
+      void reveal_installation(const std::string &executable) {
+        if (executable.empty()) {
+          return;
+        }
+
+        std::string target {executable};
+        auto macos_dir = target.rfind("/Contents/MacOS/");
+        if (macos_dir != std::string::npos) {
+          auto bundle_end = target.rfind('/', macos_dir);
+          if (bundle_end != std::string::npos) {
+            target.resize(bundle_end);
+          }
+        }
+
+        auto *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:target.c_str()]];
+        if (url != nullptr) {
+          [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[url]];
+        }
+      }
+
+      /**
+       * @brief One permission, described the same way for every output channel.
+       */
+      struct permission_t {
+        std::string key;  ///< Stable name written to `--report` files.
+        std::string purpose;  ///< What Lumen needs this permission for.
+        std::string pane;  ///< System Settings deep link for the matching list.
+        std::string action;  ///< What the user must do, which is not always flipping a switch.
+        std::function<bool()> granted;  ///< Live check, re-read on every poll.
+        std::function<void()> ask;  ///< Nudge macOS to prompt or register the entry.
+      };
+    }  // namespace
+
+    int permission_guide(int argc, char *argv[]) {
+      bool grant = false;
+      int wait_seconds = 180;
+      std::string report_path;
+
+      for (int x = 0; x < argc; ++x) {
+        std::string arg {argv[x]};
+        if (arg == "--grant") {
+          grant = true;
+        } else if (arg.rfind("--wait=", 0) == 0) {
+          wait_seconds = std::atoi(arg.c_str() + 7);
+        } else if (arg == "--wait" && x + 1 < argc) {
+          wait_seconds = std::atoi(argv[++x]);
+        } else if (arg.rfind("--report=", 0) == 0) {
+          report_path = arg.substr(9);
+        } else if (arg == "--report" && x + 1 < argc) {
+          report_path = argv[++x];
+        } else {
+          std::cout << "usage: lumen --permissions [--grant] [--wait <seconds>] [--report <path>]"sv << std::endl;
+          return 2;
+        }
+      }
+      if (wait_seconds < 1) {
+        wait_seconds = 1;
+      }
+
+      std::vector<permission_t> permissions {
+        permission_t {
+          "screen_capture",
+          "capture the desktop for the video stream",
+          std::string {k_pane_screen_capture},
+          "switch Sunshine/Lumen on in the list",
+          [] {
+            return platf::is_screen_capture_allowed();
+          },
+          [] {
+            platf::request_screen_capture_access();
+          }
+        },
+        permission_t {
+          "accessibility",
+          "post keyboard, mouse and scroll events",
+          std::string {k_pane_accessibility},
+          "switch Sunshine/Lumen on in the list",
+          [] {
+            return AXIsProcessTrusted() != 0;
+          },
+          [] {
+            request_accessibility();
+          }
+        },
+        permission_t {
+          "input_monitoring",
+          "create the virtual keyboard, mouse and gamepad devices",
+          std::string {k_pane_input_monitoring},
+          "switch Sunshine/Lumen on in the list",
+          [] {
+            return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted;
+          },
+          [] {
+            IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+          }
+        },
+        permission_t {
+          "full_disk_access",
+          "enumerate displays; without it the display list comes back empty",
+          std::string {k_pane_full_disk_access},
+          "drag the app (selected in Finder) into the list, then switch it on",
+          full_disk_access_allowed,
+          [] {
+          }
+        }
+      };
+
+      char executable_path[PATH_MAX] {};
+      uint32_t executable_size = sizeof(executable_path);
+      if (_NSGetExecutablePath(executable_path, &executable_size) != 0) {
+        executable_path[0] = '\0';
+      }
+      std::string executable {executable_path};
+
+      // Everything is echoed to the log as well: `open -na Sunshine --args
+      // permissions` has no terminal attached, so stdout alone would be lost.
+      auto say = [](const std::string &line) {
+        std::cout << line << std::endl;
+        // The log mirrors stdout only when there is no terminal, because the log
+        // sink also echoes to stdout: attached runs would print everything twice,
+        // while `open -na` runs have no stdout to read and need the log instead.
+        if (!::isatty(STDOUT_FILENO)) {
+          BOOST_LOG(info) << line;
+        }
+      };
+
+      auto snapshot = [&]() {
+        std::vector<bool> states;
+        states.reserve(permissions.size());
+        for (const auto &entry : permissions) {
+          states.push_back(entry.granted());
+        }
+        return states;
+      };
+
+      auto all_granted = [](const std::vector<bool> &states) {
+        for (bool state : states) {
+          if (!state) {
+            return false;
+          }
+        }
+        return true;
+      };
+
+      auto write_report = [&](const std::vector<bool> &states) {
+        if (report_path.empty()) {
+          return;
+        }
+        std::string body;
+        for (std::size_t x = 0; x < permissions.size(); ++x) {
+          body += permissions[x].key;
+          body += states[x] ? "=granted\n" : "=missing\n";
+        }
+        auto temp = report_path + ".tmp";
+        auto *handle = std::fopen(temp.c_str(), "w");
+        if (handle != nullptr) {
+          std::fwrite(body.data(), 1, body.size(), handle);
+          std::fclose(handle);
+          std::rename(temp.c_str(), report_path.c_str());
+        }
+      };
+
+      auto print = [&](const std::vector<bool> &states) {
+        say("");
+        say("macOS permissions for Lumen");
+        for (std::size_t x = 0; x < permissions.size(); ++x) {
+          say(std::string {states[x] ? "  [ok]   " : "  [need] "} + permissions[x].key + " - " + permissions[x].purpose);
+        }
+      };
+
+      auto states = snapshot();
+      print(states);
+      say("");
+      say("  attributed to: " + (executable.empty() ? std::string {"<unknown>"} : executable));
+      say("  macOS attributes a permission to the process that asks for it, so this is the");
+      say("  install that ran the command. A run from a terminal is attributed to the");
+      say("  terminal app itself; for the .app bundle run it as the app instead:");
+      say("    open -na Sunshine --args --permissions --grant");
+
+      if (!grant) {
+        for (std::size_t x = 0; x < permissions.size(); ++x) {
+          if (states[x]) {
+            continue;
+          }
+          say("");
+          say("  " + permissions[x].key + ": " + permissions[x].action);
+          say("    " + permissions[x].pane);
+        }
+        write_report(states);
+        return all_granted(states) ? 0 : 1;
+      }
+
+      for (std::size_t x = 0; x < permissions.size(); ++x) {
+        if (states[x]) {
+          continue;
+        }
+        permissions[x].ask();
+        platf::open_url(permissions[x].pane);
+        if (permissions[x].key == "full_disk_access") {
+          reveal_installation(executable);
+        }
+        say("");
+        say("  " + permissions[x].key + ": " + permissions[x].action);
+      }
+
+      say("");
+      say("waiting up to " + std::to_string(wait_seconds) + "s for you to grant them, checking once a second...");
+
+      auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds {wait_seconds};
+      auto previous = states;
+      while (!all_granted(states) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::seconds {1});
+        states = snapshot();
+        for (std::size_t x = 0; x < permissions.size(); ++x) {
+          if (states[x] && !previous[x]) {
+            say("  [ok]   " + permissions[x].key + " granted");
+          }
+        }
+        previous = states;
+        write_report(states);
+      }
+
+      print(states);
+      say("");
+      if (all_granted(states)) {
+        say("all permissions granted. A running process keeps the permissions it started");
+        say("with, so restart Lumen before testing.");
+        return 0;
+      }
+
+      say("still missing. Open the pane shown above for each one; if the entry is listed");
+      say("but switched off, switch it on - macOS may ask you to quit Lumen first, in which");
+      say("case quit it, switch again, then start it.");
+      return 1;
+    }
+  }  // namespace macos
+}  // namespace platf

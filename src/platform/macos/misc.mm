@@ -85,6 +85,16 @@ namespace platf {
     return false;
   }
 
+  void request_screen_capture_access() {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+#pragma clang diagnostic ignored "-Wtautological-pointer-compare"
+    if (CGRequestScreenCaptureAccess != nullptr) {
+      CGRequestScreenCaptureAccess();
+    }
+#pragma clang diagnostic pop
+  }
+
   std::unique_ptr<deinit_t> init() {
     // This will generate a warning about CGPreflightScreenCaptureAccess and
     // CGRequestScreenCaptureAccess being unavailable before macOS 10.15, but

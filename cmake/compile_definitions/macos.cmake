@@ -67,6 +67,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/gamepad_bridge.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/smooth_scroll.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/smooth_scroll.mm"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/permissions.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/permissions.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/microphone.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/misc.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/misc.h"

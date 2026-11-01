@@ -17,6 +17,16 @@ namespace platf {
    * @return True when Sunshine can capture the screen.
    */
   bool is_screen_capture_allowed();
+
+  /**
+   * @brief Ask macOS for screen-capture permission, prompting the user.
+   *
+   * This both shows the system dialog and registers the executable in the
+   * Screen Recording list, which is what lets the user switch it on. The result
+   * has to be re-read with is_screen_capture_allowed() afterwards, because the
+   * user may dismiss the dialog or grant it later.
+   */
+  void request_screen_capture_access();
 }  // namespace platf
 
 namespace dyn {

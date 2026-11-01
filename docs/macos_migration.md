@@ -64,6 +64,41 @@ packages sign the helper before signing the enclosing app.
 After changing the executable or app bundle, check Screen Recording and
 Accessibility permissions for the new installation in macOS System Settings.
 
+## First-run permissions
+
+macOS gates four things Lumen needs, and grants them per process rather than per installation:
+Screen Recording (the video stream), Accessibility (posting keyboard, mouse and scroll events),
+Input Monitoring (creating the virtual HID devices) and Full Disk Access (enumerating displays -
+without it the display list comes back empty and nothing explains why).
+
+    lumen --permissions                 # report
+    lumen --permissions --grant         # ask, open the right pane, wait for you
+    lumen --permissions --report <path> # key=granted|missing, for scripts
+
+Note the leading dashes. The argument parser reads a bare word as a configuration file path, so
+`lumen permissions` creates an empty file called `permissions` - inside an app bundle that file lands
+in `Contents/MacOS/`, and the next code-signing step refuses to sign the bundle because of it.
+
+The check has to run inside Lumen's own process, because macOS attributes a permission to whichever
+process asked for it. A probe written in a shell script reports the shell's permissions, which is the
+same effect the service log used to show when it printed `TCC permission granted to the calling
+process: /opt/homebrew/bin/bash`. `--grant` asks each missing permission of the system, opens the
+matching System Settings pane, and re-reads the states once a second until they flip or `--wait`
+expires. Full Disk Access is the odd one out: it has no query API (the probe opens the system TCC
+database and reads the EPERM) and no request API, so the guide reveals the app in Finder to be dragged
+into a list that has no add button. `--report` exists because an app started with `open -na` has no
+stdout for a script to read.
+
+`tools/macos-setup/lumen-permissions.command` wraps it as a double-clickable guide for people who
+should not have to remember any of the above: it prefers `/Applications/Sunshine.app` and runs the
+probe as the app itself, so the answer belongs to the app.
+
+Two properties of macOS permissions read as bugs unless they are documented, so the guide says both:
+
+- A process keeps the set it started with, so Lumen has to be restarted after granting anything.
+- TCC identifies the binary, not the display name, so `brew upgrade`, reinstalling the DMG, or
+  re-signing with a different identity silently resets the grants.
+
 ## Launch service timer quality
 
 The LaunchAgent that runs `lumen` must declare `ProcessType` = `Interactive`:
