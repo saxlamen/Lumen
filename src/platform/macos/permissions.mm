@@ -134,55 +134,56 @@ namespace platf {
        */
       const std::vector<permission_t> &required_permissions() {
         static const std::vector<permission_t> permissions {
-        permission_t {
-          "screen_capture",
-          "Screen Recording",
-          "capture the desktop for the video stream",
-          std::string {k_pane_screen_capture},
-          "switch Sunshine/Lumen on in the list",
-          [] {
-            return platf::is_screen_capture_allowed();
+          permission_t {
+            "screen_capture",
+            "Screen Recording",
+            "capture the desktop for the video stream",
+            std::string {k_pane_screen_capture},
+            "switch Sunshine/Lumen on in the list",
+            [] {
+              return platf::is_screen_capture_allowed();
+            },
+            [] {
+              platf::request_screen_capture_access();
+            }
           },
-          [] {
-            platf::request_screen_capture_access();
-          }
-        },
-        permission_t {
-          "accessibility",
-          "Accessibility",
-          "post keyboard, mouse and scroll events",
-          std::string {k_pane_accessibility},
-          "switch Sunshine/Lumen on in the list",
-          [] {
-            return AXIsProcessTrusted() != 0;
+          permission_t {
+            "accessibility",
+            "Accessibility",
+            "post keyboard, mouse and scroll events",
+            std::string {k_pane_accessibility},
+            "switch Sunshine/Lumen on in the list",
+            [] {
+              return AXIsProcessTrusted() != 0;
+            },
+            [] {
+              request_accessibility();
+            }
           },
-          [] {
-            request_accessibility();
-          }
-        },
-        permission_t {
-          "input_monitoring",
-          "Input Monitoring",
-          "create the virtual keyboard, mouse and gamepad devices",
-          std::string {k_pane_input_monitoring},
-          "switch Sunshine/Lumen on in the list",
-          [] {
-            return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted;
+          permission_t {
+            "input_monitoring",
+            "Input Monitoring",
+            "create the virtual keyboard, mouse and gamepad devices",
+            std::string {k_pane_input_monitoring},
+            "switch Sunshine/Lumen on in the list",
+            [] {
+              return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted;
+            },
+            [] {
+              IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+            }
           },
-          [] {
-            IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+          permission_t {
+            "full_disk_access",
+            "Full Disk Access",
+            "enumerate displays; without it the display list comes back empty",
+            std::string {k_pane_full_disk_access},
+            "drag the app (selected in Finder) into the list, then switch it on",
+            full_disk_access_allowed,
+            [] {
+            }
           }
-        },
-        permission_t {
-          "full_disk_access",
-          "Full Disk Access",
-          "enumerate displays; without it the display list comes back empty",
-          std::string {k_pane_full_disk_access},
-          "drag the app (selected in Finder) into the list, then switch it on",
-          full_disk_access_allowed,
-          [] {
-          }
-        }        };
+        };
         return permissions;
       }
 
@@ -207,20 +208,22 @@ namespace platf {
 
     std::vector<permission_state_t> permission_status() {
       std::vector<permission_state_t> status;
-      for (const auto &entry: required_permissions()) {
+      for (const auto &entry : required_permissions()) {
         status.push_back(permission_state_t {entry.key, entry.name, entry.purpose, entry.action, entry.pane, entry.granted()});
       }
 
       return status;
     }
 
-    bool request_permission(const std::string &key) {
-      for (const auto &entry: required_permissions()) {
+    bool request_permission(const std::string &key, const bool prompt) {
+      for (const auto &entry : required_permissions()) {
         if (entry.key != key) {
           continue;
         }
 
-        entry.ask();
+        if (prompt) {
+          entry.ask();
+        }
         platf::open_url(entry.pane);
         if (entry.key == "full_disk_access") {
           reveal_installation(current_executable());

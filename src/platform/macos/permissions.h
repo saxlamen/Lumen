@@ -45,9 +45,20 @@ namespace platf {
      * because that list has no add button.
      *
      * @param key A key from `permission_status()`; anything else is ignored.
+     * @param prompt Whether to ask macOS as well, or only open the pane.
+     *
+     *             Callers inside the running server have to pass `false` for
+     *             Screen Recording: it is the one permission that only applies to a
+     *             process that starts over, so asking again from a live server makes
+     *             AppKit tear the UI down while it waits for a relaunch that the ask
+     *             itself does not cause. Measured twice: asking it in-process took the
+     *             menu bar item away and left the server running behind it, while
+     *             asking Accessibility and Input Monitoring in-process was fine. The
+     *             server already asks for Screen Recording on startup, so the entry is
+     *             in the list by then, and the pane's "+" covers the rest.
      * @return True when the key was recognized.
      */
-    bool request_permission(const std::string &key);
+    bool request_permission(const std::string &key, bool prompt = true);
 
     /**
      * @brief Report and optionally request the macOS permissions Lumen needs.

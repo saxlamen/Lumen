@@ -1020,14 +1020,14 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
-  /**
-   * @brief Get the list of available applications.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   *
-   * @api_examples{/api/apps| GET| null}
-   */
-  #ifdef __APPLE__
+/**
+ * @brief Get the list of available applications.
+ * @param response The HTTP response object.
+ * @param request The HTTP request object.
+ *
+ * @api_examples{/api/apps| GET| null}
+ */
+#ifdef __APPLE__
   /**
    * @brief Report the macOS permissions Lumen needs.
    *
@@ -1046,7 +1046,7 @@ namespace confighttp {
 
     nlohmann::json permission_list = nlohmann::json::array();
     bool all_granted = true;
-    for (const auto &entry: platf::macos::permission_status()) {
+    for (const auto &entry : platf::macos::permission_status()) {
       permission_list.push_back({
         {"key", entry.key},
         {"purpose", entry.purpose},
@@ -1081,7 +1081,9 @@ namespace confighttp {
 
     const auto query_params = request->parse_query_string();
     const auto key_it = query_params.find("key");
-    if (key_it == query_params.end() || !platf::macos::request_permission(key_it->second)) {
+    // No prompt, for the same reason as the tray item: this handler runs inside the
+    // server, where asking for Screen Recording costs the menu bar item.
+    if (key_it == query_params.end() || !platf::macos::request_permission(key_it->second, false)) {
       nlohmann::json output_tree;
       output_tree["status_code"] = SimpleWeb::StatusCode::client_error_bad_request;
       output_tree["status"] = false;
@@ -1092,7 +1094,7 @@ namespace confighttp {
 
     getPermissions(response, request);
   }
-  #endif
+#endif
 
   void getApps(const resp_https_t &response, const req_https_t &request) {
     if (!authenticate(response, request)) {
@@ -2427,10 +2429,10 @@ namespace confighttp {
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
 
     // rest api
-  #ifdef __APPLE__
+#ifdef __APPLE__
     server.resource["^/api/permissions/?$"]["GET"] = getPermissions;
     server.resource["^/api/permissions/request/?$"]["GET"] = requestPermission;
-  #endif
+#endif
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/apps$"]["POST"] = saveApp;

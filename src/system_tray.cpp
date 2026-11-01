@@ -451,7 +451,10 @@ namespace system_tray {
     }
 
     BOOST_LOG(info) << "Asking for a macOS permission from the system tray: "sv << status[index].key;
-    platf::macos::request_permission(status[index].key);
+    // No prompt: this is the live server, and asking for Screen Recording from here
+    // takes the menu bar item away (see request_permission). The server asked it on
+    // startup, so the entry is already in the list; this only has to show the pane.
+    platf::macos::request_permission(status[index].key, false);
 
     // The click already closed the menu, so republishing it here is safe: rebuilding a
     // menu while it is open would close it under the user.
