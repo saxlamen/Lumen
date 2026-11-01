@@ -35,6 +35,18 @@ namespace platf::macos {
     std::condition_variable scroll_cv;
     std::atomic<bool> scroll_thread_stop {false};
     std::thread scroll_inertia_thread;
+
+    /**
+     * @brief Smoothed interval between client scroll packets, in milliseconds.
+     *
+     * The client packet period is what decides how long the host must wait before it may
+     * assume the user lifted their finger. It was measured at roughly 9ms for slow drags and
+     * 25-33ms for fast flicks, so a single fixed threshold cannot serve both.
+     */
+    std::atomic<double> input_cadence_ms {0.0};
+
+    /// Idle time after which host-side inertia takes over, derived from ::input_cadence_ms.
+    std::atomic<double> release_threshold_ms {45.0};
     bool scroll_thread_initialized = false;
 
     /**
@@ -103,6 +115,8 @@ namespace platf::macos {
                       << " avg_post_duration=" << average_post_duration_ms << "ms"
                       << " max_post_duration=" << static_cast<double>(post_duration_max_us) / 1000.0 << "ms"
                       << " mode=host_inertia"
+                      << " input_cadence_ms=" << input_cadence_ms.load(std::memory_order_relaxed)
+                      << " release_threshold_ms=" << release_threshold_ms.load(std::memory_order_relaxed)
                       << " momentum_started=" << momentum_started
                       << " momentum_cancelled=" << momentum_cancelled;
     }
@@ -178,7 +192,6 @@ namespace platf::macos {
     }
 
     void scroll_inertia_loop() {
-      constexpr auto RELEASE_THRESHOLD = std::chrono::milliseconds(25);
       constexpr auto FRAME_DURATION = std::chrono::milliseconds(8);
       constexpr double FRICTION_PER_SECOND = 5.5;
       constexpr double MIN_VELOCITY = 12.0;
@@ -187,13 +200,20 @@ namespace platf::macos {
       pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
       while (!scroll_thread_stop.load(std::memory_order_relaxed)) {
         report_scroll_diagnostics(std::chrono::steady_clock::now());
+
+        // Derived from the measured client packet period: a gap must be about two packets wide
+        // before it counts as a release, otherwise normal streaming jitter starts inertia.
+        const auto release_threshold = std::chrono::milliseconds {
+          static_cast<std::chrono::milliseconds::rep>(release_threshold_ms.load(std::memory_order_relaxed))
+        };
+
         std::unique_lock<std::mutex> lock(scroll_mutex);
         if (!scroll_in_progress) {
-          scroll_cv.wait_for(lock, RELEASE_THRESHOLD, [&] {
+          scroll_cv.wait_for(lock, release_threshold, [&] {
             return scroll_thread_stop.load(std::memory_order_relaxed) || scroll_in_progress;
           });
         } else {
-          const auto release_deadline = last_input_time + RELEASE_THRESHOLD;
+          const auto release_deadline = last_input_time + release_threshold;
           if (std::chrono::steady_clock::now() < release_deadline) {
             scroll_cv.wait_until(lock, release_deadline, [&] {
               return scroll_thread_stop.load(std::memory_order_relaxed);
@@ -203,7 +223,7 @@ namespace platf::macos {
         if (scroll_thread_stop.load(std::memory_order_relaxed)) {
           break;
         }
-        if (!scroll_in_progress || std::chrono::steady_clock::now() - last_input_time < RELEASE_THRESHOLD) {
+        if (!scroll_in_progress || std::chrono::steady_clock::now() - last_input_time < release_threshold) {
           continue;
         }
 
@@ -283,6 +303,17 @@ namespace platf::macos {
         std::lock_guard<std::mutex> event_lock(event_mutex);
         last_output_time = {};
       }
+      // Learn how fast the client is delivering packets. Gaps wider than 100ms are treated as
+      // the end of a gesture and are left out, so idle time between gestures cannot stretch the
+      // threshold and delay the start of inertia.
+      if (sample_dt > 0.001 && sample_dt < 0.1) {
+        const auto sample_ms = sample_dt * 1000.0;
+        const auto previous_cadence_ms = input_cadence_ms.load(std::memory_order_relaxed);
+        const auto smoothed_cadence_ms = previous_cadence_ms == 0.0 ? sample_ms : previous_cadence_ms * 0.75 + sample_ms * 0.25;
+        input_cadence_ms.store(smoothed_cadence_ms, std::memory_order_relaxed);
+        release_threshold_ms.store(std::clamp(smoothed_cadence_ms * 2.2, 45.0, 100.0), std::memory_order_relaxed);
+      }
+
       scroll_velocity_y = update_scroll_velocity(scroll_velocity_y, delta_y, sample_dt, had_scroll);
       scroll_velocity_x = update_scroll_velocity(scroll_velocity_x, delta_x, sample_dt, had_scroll);
       const auto velocity_y = scroll_velocity_y;
@@ -359,6 +390,8 @@ namespace platf::macos {
       scroll_diagnostics_enabled = config::input.macos_smooth_scrolling_diagnostics || diagnostics_value != nullptr;
       scroll_diagnostics_trace = diagnostics_value != nullptr && std::string_view {diagnostics_value} == "trace";
       last_diagnostics_report = std::chrono::steady_clock::now();
+      input_cadence_ms.store(0.0, std::memory_order_relaxed);
+      release_threshold_ms.store(45.0, std::memory_order_relaxed);
       last_input_time = {};
       last_output_time = {};
       scroll_thread_stop.store(false, std::memory_order_relaxed);
