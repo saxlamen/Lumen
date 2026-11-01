@@ -123,7 +123,7 @@ namespace platf {
 
     int permission_guide(int argc, char *argv[]) {
       bool grant = false;
-      int wait_seconds = 180;
+      int wait_seconds = 300;  // per permission: dragging into a list takes a while
       std::string report_path;
 
       for (int x = 0; x < argc; ++x) {
@@ -139,7 +139,7 @@ namespace platf {
         } else if (arg == "--report" && x + 1 < argc) {
           report_path = argv[++x];
         } else {
-          std::cout << "usage: lumen --permissions [--grant] [--wait <seconds>] [--report <path>]"sv << std::endl;
+          std::cout << "usage: lumen --permissions [--grant] [--wait <seconds per item>] [--report <path>]"sv << std::endl;
           return 2;
         }
       }
@@ -232,11 +232,22 @@ namespace platf {
         return true;
       };
 
-      auto write_report = [&](const std::vector<bool> &states) {
+      auto write_report = [&](const std::vector<bool> &states, const std::string &active = {}, bool finished = false) {
         if (report_path.empty()) {
           return;
         }
         std::string body;
+        if (finished) {
+          // The wrapper script cannot tell whether this process is still guiding by
+          // looking at the process list, so the last report says so itself.
+          body += "done=1\n";
+        }
+        if (!active.empty()) {
+          // The guide is a process the user cannot see output from, while the
+          // wrapper script is the thing they are watching: this line tells the
+          // script which permission the user should be switching on right now.
+          body += "active=" + active + "\n";
+        }
         for (std::size_t x = 0; x < permissions.size(); ++x) {
           body += permissions[x].key;
           body += states[x] ? "=granted\n" : "=missing\n";
@@ -280,47 +291,56 @@ namespace platf {
         return all_granted(states) ? 0 : 1;
       }
 
+      say("");
+      say("  macOS shows the prompt only the first time a permission is asked for, so if");
+      say("  no dialog appears, switch it on in the pane that opens - it opens one pane at");
+      say("  a time and waits for that one before moving on.");
+
       for (std::size_t x = 0; x < permissions.size(); ++x) {
+        states = snapshot();
         if (states[x]) {
           continue;
         }
+
+        say("");
+        say("-- " + permissions[x].key + ": " + permissions[x].purpose);
+        say("   " + permissions[x].action);
+        say("   " + permissions[x].pane);
+
         permissions[x].ask();
         platf::open_url(permissions[x].pane);
         if (permissions[x].key == "full_disk_access") {
           reveal_installation(executable);
         }
-        say("");
-        say("  " + permissions[x].key + ": " + permissions[x].action);
-      }
 
-      say("");
-      say("waiting up to " + std::to_string(wait_seconds) + "s for you to grant them, checking once a second...");
-
-      auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds {wait_seconds};
-      auto previous = states;
-      while (!all_granted(states) && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(std::chrono::seconds {1});
-        states = snapshot();
-        for (std::size_t x = 0; x < permissions.size(); ++x) {
-          if (states[x] && !previous[x]) {
-            say("  [ok]   " + permissions[x].key + " granted");
-          }
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds {wait_seconds};
+        while (!states[x] && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::seconds {1});
+          states = snapshot();
+          write_report(states, permissions[x].key);
         }
-        previous = states;
-        write_report(states);
+
+        if (states[x]) {
+          say("   [ok] granted");
+        } else {
+          say("   [skip] still missing after " + std::to_string(wait_seconds) + "s, moving on");
+        }
       }
 
+      states = snapshot();
+      write_report(states, {}, true);
       print(states);
       say("");
       if (all_granted(states)) {
         say("all permissions granted. A running process keeps the permissions it started");
-        say("with, so restart Lumen before testing.");
+        say("with, so start Lumen now - the menu bar icon appears only once it is running,");
+        say("and an instance that was already running has to be quit and opened again.");
         return 0;
       }
 
-      say("still missing. Open the pane shown above for each one; if the entry is listed");
-      say("but switched off, switch it on - macOS may ask you to quit Lumen first, in which");
-      say("case quit it, switch again, then start it.");
+      say("still missing. Open System Settings > Privacy & Security for the names above;");
+      say("if an entry is listed but switched off, switch it on - macOS may ask you to quit");
+      say("Lumen first, in which case quit, switch, start it again and run this once more.");
       return 1;
     }
   }  // namespace macos
