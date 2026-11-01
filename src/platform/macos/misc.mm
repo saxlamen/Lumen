@@ -17,11 +17,15 @@
 #include <ifaddrs.h>
 
 // platform includes
+#include <AppKit/AppKit.h>
 #include <arpa/inet.h>
 #include <dlfcn.h>
 #include <Foundation/Foundation.h>
 #include <mach-o/dyld.h>
+#include <mutex>
 #include <net/if_dl.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 #include <pwd.h>
 #include <sys/qos.h>
 
@@ -312,6 +316,76 @@ namespace platf {
    * via `launchctl` when the LaunchAgent plist is present, or re-executes
    * the binary directly when running standalone.
    */
+  namespace {
+    /**
+     * @brief Answer a quit request from macOS by shutting the process down ourselves.
+     *
+     * @param self_ The delegate instance, which is Qt's.
+     * @param app The application asking to terminate.
+     * @return NSTerminateLater, because we terminate on our own schedule.
+     */
+    NSApplicationTerminateReply quit_requested(id self_, NSApplication *app) {
+      BOOST_LOG(info) << "macOS asked Lumen to quit, exiting so it can be relaunched"sv;
+
+      // Reply before starting the shutdown: the sender of the request is what decides whether to
+      // relaunch us, and replying only after the last thread has unwound is too late for it.
+      [app replyToApplicationShouldTerminate:YES];
+
+      // This is the path the tray's Quit item uses, and it is deliberately not AppKit's own
+      // terminate:, which is the call that was being cancelled in the first place.
+      platf::quit();
+      return NSTerminateLater;
+    }
+  }  // namespace
+
+  void handle_quit_requests() {
+    // System Settings asks Lumen to quit right after granting a permission and relaunches it
+    // afterwards, which is the only way Screen Recording takes effect. Qt installs itself as the
+    // application delegate to field that request, and having nothing to shut down it answers
+    // "user canceled": the menu bar icon is already torn down by then, this process keeps running,
+    // and nothing is ever relaunched, which looks exactly like the tray dying.
+    //
+    // Replacing the delegate outright would take Qt's Dock and menu handling with it, so instead
+    // this answers just the one method on the delegate's own class, leaving every other message
+    // exactly where Qt put it.
+    static std::once_flag once;
+    std::call_once(once, []() {
+      id delegate = [NSApp delegate];
+      if (delegate == nil) {
+        BOOST_LOG(warning) << "No application delegate yet, so a quit request would go unanswered"sv;
+        return;
+      }
+
+      Class delegate_class = object_getClass(delegate);
+      SEL terminate = @selector(applicationShouldTerminate:);
+      IMP handler = imp_implementationWithBlock(^NSApplicationTerminateReply(id self_, NSApplication *app) {
+        return quit_requested(self_, app);
+      });
+
+      // Only overwrite a method the delegate's own class implements. If it were inherited,
+      // overwriting it would change every instance of some class much older than the tray.
+      bool implemented_here = false;
+      unsigned method_count = 0;
+      Method *methods = class_copyMethodList(delegate_class, &method_count);
+      for (unsigned x = 0; x < method_count; ++x) {
+        if (method_getName(methods[x]) == terminate) {
+          implemented_here = true;
+          break;
+        }
+      }
+      free(methods);
+
+      if (implemented_here) {
+        method_setImplementation(class_getInstanceMethod(delegate_class, terminate), handler);
+      } else if (!class_addMethod(delegate_class, terminate, handler, "@@:@")) {
+        BOOST_LOG(warning) << "Could not take over the quit request on the application delegate"sv;
+        return;
+      }
+
+      BOOST_LOG(info) << "Now answering quit requests from macOS on behalf of " << class_getName(delegate_class);
+    });
+  }
+
   void restart() {
     const uid_t uid = getuid();
     const pid_t parent_pid = getpid();

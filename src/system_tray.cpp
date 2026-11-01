@@ -40,6 +40,8 @@
     #include <AccCtrl.h>
     #include <AclAPI.h>
   #elif defined(__APPLE__) || defined(__MACH__)
+    #include "platform/macos/misc.h"
+
     #include <CoreFoundation/CoreFoundation.h>
     #include <dispatch/dispatch.h>
   #endif
@@ -924,6 +926,13 @@ namespace system_tray {
       }
 
       tray_initialized_state().store(true);
+
+  #ifdef __APPLE__
+      // macOS asks this process to quit before relaunching it after a permission grant, and Qt's
+      // application delegate answers that request by cancelling it. Take just that method over,
+      // once Qt has installed its delegate, which tray_init() is what does.
+      platf::handle_quit_requests();
+  #endif
     }
 
     BOOST_LOG(info) << "System tray created"sv;

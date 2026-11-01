@@ -12,6 +12,16 @@
 
 namespace platf {
   /**
+   * @brief Start answering the quit requests macOS sends before relaunching an application.
+   *
+   * System Settings asks for a quit right after granting a permission, then relaunches the app,
+   * which is the only way Screen Recording takes effect. Left to Qt's application delegate that
+   * request is cancelled, which leaves the process running with its menu bar icon already gone.
+   * Must be called from the thread that owns the tray.
+   */
+  void handle_quit_requests();
+
+  /**
    * @brief Check whether macOS has granted screen-capture permission.
    *
    * @return True when Sunshine can capture the screen.
