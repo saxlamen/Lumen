@@ -66,8 +66,6 @@ namespace platf {
      *
      * macOS shows its prompt only the first time a permission is requested, so this
      * also opens the pane: without it a user who already answered "Don't Allow" once
-     * has nowhere to go. Full Disk Access additionally reveals the bundle in Finder,
-     * because that list has no add button.
      *
      * @param key A key from `permission_status()`; anything else is ignored.
      * @param prompt Whether to ask macOS as well, or only open the pane.

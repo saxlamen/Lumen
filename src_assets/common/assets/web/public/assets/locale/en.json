@@ -515,9 +515,7 @@
     "macos_permissions_restart": "After granting: quit Lumen from the menu bar and open it again - a running process keeps the permissions it started with.",
     "macos_permission": {
       "screen_capture": "Screen Recording",
-      "accessibility": "Accessibility",
-      "input_monitoring": "Input Monitoring",
-      "full_disk_access": "Full Disk Access"
+      "accessibility": "Accessibility"
     }
   },
   "navbar": {

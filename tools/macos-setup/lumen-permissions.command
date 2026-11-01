@@ -19,16 +19,14 @@ trap 'rm -f "$REPORT" "$REPORT.tmp"' EXIT
 
 # key 的顺序与内容要和 src/platform/macos/permissions.mm 里的 key 一致
 # 這份碼只用 CGEventPost（要輔助功能），不需要輸入監視器：不要随便加回來
-KEYS=(screen_capture accessibility full_disk_access)
+KEYS=(screen_capture accessibility)
 NAMES=(
   "屏幕录制      截取桌面画面（视频流）"
   "辅助功能      送出键盘、鼠标、滚动事件"
-  "完全磁盘访问  列出显示器；不给的话显示器清单会是空的"
 )
 ACTIONS=(
   "在列表里把 Sunshine 的开关打开"
   "在列表里把 Sunshine 的开关打开（若 macOS 要求先退出 Sunshine，同意，之后再开一次）"
-  "把 Finder 里选中的 Sunshine.app 拖进右边列表，再打开开关（这列表没有 + 按钮）"
 )
 
 # 每一项最多等 5 分钟（完全磁盘访问要拖档案）

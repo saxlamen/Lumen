@@ -23,8 +23,6 @@
 #import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreFoundation/CoreFoundation.h>
-#include <fcntl.h>
-#import <IOKit/hidsystem/IOHIDLib.h>
 #include <mach-o/dyld.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -44,27 +42,6 @@ namespace platf {
       // which is the only supported way to land the user on the right one.
       constexpr std::string_view k_pane_screen_capture {"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"};
       constexpr std::string_view k_pane_accessibility {"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"};
-      constexpr std::string_view k_pane_full_disk_access {"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"};
-
-      /**
-       * @brief Full Disk Access has no query API, so probe a protected file.
-       *
-       * The system TCC database lives outside this process's container: without
-       * the permission the kernel answers EPERM rather than ENOENT, and with it the
-       * file opens normally. Anything else is reported as missing, because a
-       * permission we did not observe is not one worth claiming.
-       *
-       * @return True when this process can read files outside its container.
-       */
-      bool full_disk_access_allowed() {
-        int fd = ::open("/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY | O_CLOEXEC);
-        if (fd >= 0) {
-          ::close(fd);
-          return true;
-        }
-
-        return false;
-      }
 
       /**
        * @brief Ask macOS for Accessibility, which is what CGEvent posting needs.
@@ -79,35 +56,6 @@ namespace platf {
         if (options != nullptr) {
           AXIsProcessTrustedWithOptions(options);
           CFRelease(options);
-        }
-      }
-
-      /**
-       * @brief Reveal the app bundle, or the bare binary, in Finder.
-       *
-       * Full Disk Access has no add button, so the only way to register an app is
-       * to drag it into the list; this selects the thing to drag. A bundle's
-       * executable is not the thing, so the enclosing .app is selected instead.
-       *
-       * @param executable Path of the running executable.
-       */
-      void reveal_installation(const std::string &executable) {
-        if (executable.empty()) {
-          return;
-        }
-
-        std::string target {executable};
-        auto macos_dir = target.rfind("/Contents/MacOS/");
-        if (macos_dir != std::string::npos) {
-          auto bundle_end = target.rfind('/', macos_dir);
-          if (bundle_end != std::string::npos) {
-            target.resize(bundle_end);
-          }
-        }
-
-        auto *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:target.c_str()]];
-        if (url != nullptr) {
-          [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[url]];
         }
       }
 
@@ -129,11 +77,19 @@ namespace platf {
       /**
        * @brief The one list of permissions Lumen needs, shared by every caller.
        *
-       * Input Monitoring is deliberately absent even though the upstream macOS notes
-       * mention it: this code posts events with CGEventPost, which needs Accessibility,
-       * and nothing in the tree opens an IOHID listen reference. Listing a permission
-       * the app never asks for sends the user to a System Settings list with no entry in
-       * it, which reads as a broken app.
+       * Only Screen Recording and Accessibility remain, because the other two that the
+       * upstream macOS notes mention were measured unnecessary here rather than assumed
+       * so:
+       *
+       * - Input Monitoring: this code posts events with CGEventPost, which needs
+       *   Accessibility, and nothing in the tree opens an IOHID listen reference.
+       * - Full Disk Access: with it switched off the display list still came back with
+       *   both displays, `edid` and `hdr_state` were null with or without it, and nothing
+       *   logged anything about it.
+       *
+       * Listing a permission the app does not need sends the user to a System Settings
+       * list that may hold no entry for Lumen at all, and every such detour costs a
+       * quit-and-reopen cycle, so the list stays as short as the measurements allow.
        *
        *
        * The `permissions` command, the tray menu and the web UI banner all read this
@@ -170,16 +126,6 @@ namespace platf {
               request_accessibility();
             }
           },
-          permission_t {
-            "full_disk_access",
-            "Full Disk Access",
-            "enumerate displays; without it the display list comes back empty",
-            std::string {k_pane_full_disk_access},
-            "drag the app (selected in Finder) into the list, then switch it on",
-            full_disk_access_allowed,
-            [] {
-            }
-          }
         };
         return permissions;
       }
@@ -299,9 +245,6 @@ namespace platf {
 
       BOOST_LOG(info) << "First run with a missing macOS permission ("sv << missing_key << "), opening its settings pane";
       platf::open_url(missing_pane);
-      if (missing_key == "full_disk_access") {
-        reveal_installation(current_executable());
-      }
 
       if (!stamp.empty() && !stamp_path.empty()) {
         std::error_code ec;
@@ -332,9 +275,6 @@ namespace platf {
           entry.ask();
         }
         platf::open_url(entry.pane);
-        if (entry.key == "full_disk_access") {
-          reveal_installation(current_executable());
-        }
 
         return true;
       }
@@ -478,9 +418,6 @@ namespace platf {
 
         permissions[x].ask();
         platf::open_url(permissions[x].pane);
-        if (permissions[x].key == "full_disk_access") {
-          reveal_installation(executable);
-        }
 
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds {wait_seconds};
         while (!states[x] && std::chrono::steady_clock::now() < deadline) {

@@ -66,10 +66,18 @@ Accessibility permissions for the new installation in macOS System Settings.
 
 ## First-run permissions
 
-macOS gates four things Lumen needs, and grants them per process rather than per installation:
-Screen Recording (the video stream), Accessibility (posting keyboard, mouse and scroll events),
-Input Monitoring (creating the virtual HID devices) and Full Disk Access (enumerating displays -
-without it the display list comes back empty and nothing explains why).
+macOS gates two things Lumen needs, and grants them per process rather than per installation:
+Screen Recording (the video stream) and Accessibility (posting keyboard, mouse and scroll events
+with `CGEventPost`). The list lives in one place, `src/platform/macos/permissions.mm`, and the
+command line, the menu bar submenu and the web page all read it from there.
+
+The two permissions the upstream macOS notes mention are deliberately not asked for, because both
+were measured unnecessary here instead of assumed so. Input Monitoring gates reading input, while
+Lumen only writes it and opens no IOHID listen reference. Full Disk Access changed nothing
+observable: with it switched off the display list still came back complete, `edid` and `hdr_state`
+were null with or without it, and no subsystem reported anything about it. A permission the app
+never asks for looks like an empty System Settings list, and every detour through a wrong pane
+costs a quit-and-reopen cycle, so the list stays as short as the measurements allow.
 
     lumen --permissions                 # report
     lumen --permissions --grant         # ask, open the right pane, wait for you
@@ -84,10 +92,18 @@ process asked for it. A probe written in a shell script reports the shell's perm
 same effect the service log used to show when it printed `TCC permission granted to the calling
 process: /opt/homebrew/bin/bash`. `--grant` asks each missing permission of the system, opens the
 matching System Settings pane, and re-reads the states once a second until they flip or `--wait`
-expires. Full Disk Access is the odd one out: it has no query API (the probe opens the system TCC
-database and reads the EPERM) and no request API, so the guide reveals the app in Finder to be dragged
-into a list that has no add button. `--report` exists because an app started with `open -na` has no
-stdout for a script to read.
+expires. `--report` exists because an app started with `open -na` has no stdout for a script to read.
+
+The same information is where a first-time user actually looks, which is what the command line guide
+was missing:
+
+- the menu bar icon has a **Permissions** submenu listing each permission with `Granted` or `Needed`,
+  one item per permission, and clicking one opens that pane
+- the web home page shows a banner naming what is missing, and re-reads it every few seconds
+- the first launch after an install opens the settings pane of the first missing permission by itself
+- at startup Lumen asks for the permissions it can ask for, on the process' main thread - asking from
+  a worker thread takes the menu bar icon away while the server keeps running - except Screen
+  Recording, which the capture path asks for itself
 
 `tools/macos-setup/lumen-permissions.command` wraps it as a double-clickable guide for people who
 should not have to remember any of the above: it prefers `/Applications/Sunshine.app` and runs the
@@ -98,6 +114,9 @@ Two properties of macOS permissions read as bugs unless they are documented, so 
 - A process keeps the set it started with, so Lumen has to be restarted after granting anything.
 - TCC identifies the binary, not the display name, so `brew upgrade`, reinstalling the DMG, or
   re-signing with a different identity silently resets the grants.
+- An older command line install leaves entries of its own (`lumen`) in the same panes; the entry to
+  turn on is `Sunshine`. `tccutil` cannot remove those path-based entries, so delete them in System
+  Settings if they are in the way.
 
 ## Launch service timer quality
 
