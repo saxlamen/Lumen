@@ -27,6 +27,17 @@ namespace platf {
     };
 
     /**
+     * @brief Ask macOS for the missing permissions that can be asked safely here.
+     *
+     * Called during startup, before the tray exists: asking is what puts an entry in the
+     * relevant System Settings list at all, so without it a first-time user is sent
+     * looking for a switch that has no reason to be there yet. macOS shows the prompt
+     * only the first time, so this stays quiet on later runs while still registering the
+     * app for anyone who denied it earlier.
+     */
+    void ask_missing_permissions();
+
+    /**
      * @brief Report the macOS permissions Lumen needs, live.
      *
      * The checks have to run in Lumen's own process, and they are re-read on every

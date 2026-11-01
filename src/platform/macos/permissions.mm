@@ -40,7 +40,6 @@ namespace platf {
       // which is the only supported way to land the user on the right one.
       constexpr std::string_view k_pane_screen_capture {"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"};
       constexpr std::string_view k_pane_accessibility {"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"};
-      constexpr std::string_view k_pane_input_monitoring {"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"};
       constexpr std::string_view k_pane_full_disk_access {"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"};
 
       /**
@@ -126,6 +125,13 @@ namespace platf {
       /**
        * @brief The one list of permissions Lumen needs, shared by every caller.
        *
+       * Input Monitoring is deliberately absent even though the upstream macOS notes
+       * mention it: this code posts events with CGEventPost, which needs Accessibility,
+       * and nothing in the tree opens an IOHID listen reference. Listing a permission
+       * the app never asks for sends the user to a System Settings list with no entry in
+       * it, which reads as a broken app.
+       *
+       *
        * The `permissions` command, the tray menu and the web UI banner all read this
        * same list, so a permission cannot be described in one place and forgotten in
        * another - and the order is the order a guide walks through.
@@ -161,19 +167,6 @@ namespace platf {
             }
           },
           permission_t {
-            "input_monitoring",
-            "Input Monitoring",
-            "create the virtual keyboard, mouse and gamepad devices",
-            std::string {k_pane_input_monitoring},
-            "switch Sunshine/Lumen on in the list",
-            [] {
-              return IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted;
-            },
-            [] {
-              IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
-            }
-          },
-          permission_t {
             "full_disk_access",
             "Full Disk Access",
             "enumerate displays; without it the display list comes back empty",
@@ -205,6 +198,19 @@ namespace platf {
         return std::string {executable_path};
       }
     }  // namespace
+
+    void ask_missing_permissions() {
+      for (const auto &entry : required_permissions()) {
+        // Screen Recording is left out: asking a live server for it makes AppKit tear
+        // the UI down while it waits for a relaunch the ask does not cause, and the
+        // capture path already asks for it during startup, before the tray exists.
+        if (entry.key == "screen_capture" || entry.granted()) {
+          continue;
+        }
+
+        entry.ask();
+      }
+    }
 
     std::vector<permission_state_t> permission_status() {
       std::vector<permission_state_t> status;

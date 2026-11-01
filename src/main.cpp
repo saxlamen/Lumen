@@ -41,6 +41,9 @@
 #include "main.h"
 #include "nvhttp.h"
 #include "process.h"
+#ifdef __APPLE__
+  #include "platform/macos/permissions.h"
+#endif
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -270,6 +273,13 @@ int main(int argc, char *argv[]) {
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
   BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " (Lumen " << LUMEN_VERSION << ") commit: " << PROJECT_VERSION_COMMIT;
+
+// Ask for the permissions that are only discoverable by asking, before the tray and
+// the first stream start. Without this the user is sent to a System Settings list with
+// no Lumen entry in it, because asking is what creates that entry.
+#ifdef __APPLE__
+  platf::macos::ask_missing_permissions();
+#endif
 
   // Log publisher metadata
   log_publisher_data();
