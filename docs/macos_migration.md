@@ -64,6 +64,34 @@ packages sign the helper before signing the enclosing app.
 After changing the executable or app bundle, check Screen Recording and
 Accessibility permissions for the new installation in macOS System Settings.
 
+## Launch service timer quality
+
+The LaunchAgent that runs `lumen` must declare `ProcessType` = `Interactive`:
+
+```sh
+/usr/libexec/PlistBuddy -c "Add :ProcessType string Interactive" \
+  ~/Library/LaunchAgents/sh.brew.lumen.plist
+```
+
+Agents that do not declare themselves interactive are treated as background jobs and macOS
+coalesces their timer wakeups. Measured on an 8ms `mach_wait_until` deadline: 26ms median
+oversleep without the key and 2ms with it, while the same code in a process started from a
+terminal overslept by 2ms. That throttling is invisible except as stutter, because the scroll
+inertia loop runs on a fixed frame schedule and simply drops to ~30Hz. Homebrew regenerates the
+plist on every `brew services` call and its service DSL has no `ProcessType` key, so `build.sh`
+re-adds it after each start; a manual `brew reinstall` followed by a raw `launchctl bootstrap`
+without the key loses it again.
+
+The startup log records what the process actually achieved, which is the quickest way to tell
+whether the key is in effect:
+
+```
+macOS inertia timer calibration [16 x 8ms mach_wait_until, this thread] median_oversleep=2.0ms
+```
+
+A value near 2ms means the schedule is healthy. Anything above 10ms means the service lost the
+key.
+
 ## Release validation
 
 Automated tests cover legacy audio source selection, HID report mappings,
