@@ -50,6 +50,7 @@
   #include <chrono>
   #include <csignal>
   #include <cstddef>
+  #include <cstdint>
   #include <filesystem>
   #include <format>
   #include <functional>
@@ -290,46 +291,101 @@ namespace system_tray {
 
   #ifdef __APPLE__
   /**
-   * @brief Ask for the next macOS permission that is switched off.
+   * @brief Storage for the permission submenu labels.
    *
-   * This runs on the main queue on purpose. The calls that prompt for or register a
-   * permission are part of the app's UI layer: asking from a worker thread was
-   * measured to leave this process's menu bar item gone - the tray looked dead while
-   * the server kept running behind it - and the prompts themselves are app UI.
+   * The tray library keeps the `const char *` it was handed, so the strings behind the
+   * labels have to outlive the call that built the menu.
    *
-   * @param context Unused.
+   * @return The label storage, one slot per submenu entry.
    */
-  void tray_permissions_request_next(void *context) {
-    (void) context;
-
-    for (const auto &entry : platf::macos::permission_status()) {
-      if (entry.granted) {
-        continue;
-      }
-
-      BOOST_LOG(info) << "Asking for a macOS permission from the system tray: "sv << entry.key;
-      platf::macos::request_permission(entry.key);
-      return;
-    }
-
-    BOOST_LOG(info) << "All macOS permissions Lumen needs are granted"sv;
-    platf::open_url("x-apple.systempreferences:com.apple.preference.security");
+  std::array<std::string, 7> &permission_menu_text_storage() {
+    static std::array<std::string, 7> storage;
+    return storage;
   }
 
   /**
-   * @brief Walk the user through the macOS permissions Lumen needs.
+   * @brief Assign text and behavior to one permission submenu item.
    *
-   * macOS attributes a permission to the process that asks for it, so this has to
-   * happen in the server rather than in a script or a helper app. One permission per
-   * click, deliberately: System Settings reuses a single window, so asking for all
-   * four at once opens four panes on top of each other and leaves the user staring at
-   * whichever one happened to land last. Clicking again advances to the next one.
-   *
-   * @param item The clicked menu item.
+   * @tparam Callback Callback type accepted by the tray library.
+   * @param menu Submenu to populate.
+   * @param index Submenu index to populate.
+   * @param text User-visible menu text.
+   * @param disabled Whether the item is informational rather than actionable.
+   * @param callback Callback invoked for actionable items.
    */
-  void tray_permissions_cb([[maybe_unused]] struct tray_menu *item) {
-    dispatch_async_f(dispatch_get_main_queue(), nullptr, tray_permissions_request_next);
+  template<typename Callback = std::nullptr_t>
+  void set_permission_menu_item(
+    std::array<struct tray_menu, 7> &menu,
+    const std::size_t index,
+    std::string text,
+    const bool disabled,
+    Callback callback = nullptr
+  ) {
+    auto &menu_text = permission_menu_text_storage();
+    menu_text[index] = std::move(text);
+    menu[index] = {
+      .text = menu_text[index].c_str(),
+      .disabled = disabled,
+      .cb = callback,
+    };
   }
+
+  /**
+   * @brief Handle a click on one of the permission submenu items.
+   *
+   * @param item The clicked submenu item.
+   */
+  void tray_permission_item_cb(struct tray_menu *item);
+
+  /**
+   * @brief Fill a permission submenu from what macOS says right now.
+   *
+   * Each permission is its own item, because System Settings reuses a single window: a
+   * single item that asked for everything would open four panes stacked on top of each
+   * other and leave the user staring at whichever one landed last. The state is part of
+   * the text rather than a checkmark, because a menu with no checkmark next to an entry
+   * reads as "not applicable" instead of "not granted".
+   *
+   * @param menu Submenu to fill.
+   */
+  void fill_permission_menu(std::array<struct tray_menu, 7> &menu) {
+    // The library stops at the first entry without text, which is also how a shorter
+    // permission list than the storage leaves room.
+    menu = {};
+
+    const auto status = platf::macos::permission_status();
+    std::size_t index = 0;
+    for (; index < status.size() && index + 2 < menu.size(); ++index) {
+      set_permission_menu_item(
+        menu,
+        index,
+        std::format("{} - {}", status[index].name, status[index].granted ? "Granted" : "Needed"),
+        false,
+        tray_permission_item_cb
+      );
+    }
+
+    // Most grants only apply to a process that starts over, and a menu that says
+    // "Granted" is the one place that has to say what happens next.
+    menu[index] = {.text = "-"};
+    set_permission_menu_item(menu, index + 1, "Quit and reopen Sunshine after granting", true);
+  }
+
+  /**
+   * @brief Build the permission submenu as things stand when the tray starts.
+   *
+   * @return The submenu entries, terminated by an empty entry.
+   */
+  std::array<struct tray_menu, 7> initial_permission_menu() {
+    std::array<struct tray_menu, 7> menu {};
+    fill_permission_menu(menu);
+    return menu;
+  }
+
+  static auto permission_menu = initial_permission_menu();  ///< macOS permission submenu, republished whenever it is safe.
+
+  void tray_permission_item_request(void *context);
+
   #endif
 
   // Tray menu
@@ -343,7 +399,7 @@ namespace system_tray {
   #ifdef __APPLE__
         // Without these four permissions Lumen streams a black screen and takes no
         // input, and a first-time user has no way to find out that they are missing.
-        {.text = "Permissions", .cb = tray_permissions_cb},
+        {.text = "Permissions", .submenu = permission_menu.data()},
   #endif
         {.text = "-"},
   #ifdef _WIN32
@@ -375,6 +431,58 @@ namespace system_tray {
     .allIconPaths = {TRAY_ICON, TRAY_ICON_LOCKED, TRAY_ICON_PLAYING, TRAY_ICON_PAUSING},
   #endif
   };
+
+  #ifdef __APPLE__
+  /**
+   * @brief Ask for the permission whose submenu item was clicked.
+   *
+   * Runs on the main queue: the calls that prompt for a permission, or that register the
+   * entry so it shows up in the list at all, are part of the app's UI layer. Asking from
+   * a worker thread was measured to take this process's menu bar item away - the tray
+   * looked dead while the server kept running behind it.
+   *
+   * @param context Submenu index of the permission to ask for.
+   */
+  void tray_permission_item_request(void *context) {
+    const auto index = static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(context));
+    const auto status = platf::macos::permission_status();
+    if (index >= status.size()) {
+      return;
+    }
+
+    BOOST_LOG(info) << "Asking for a macOS permission from the system tray: "sv << status[index].key;
+    platf::macos::request_permission(status[index].key);
+
+    // The click already closed the menu, so republishing it here is safe: rebuilding a
+    // menu while it is open would close it under the user.
+    const std::scoped_lock lock(tray_state_mutex());
+    if (tray_initialized_state().load()) {
+      fill_permission_menu(permission_menu);
+      tray_update(&tray);
+    }
+  }
+
+  /**
+   * @brief Handle a click on one of the permission submenu items.
+   *
+   * @param item The clicked submenu item.
+   */
+  void tray_permission_item_cb(struct tray_menu *item) {
+    const auto *first = permission_menu.data();
+    std::size_t index = 0;
+    for (; index < permission_menu.size(); ++index) {
+      if (first + index == item) {
+        break;
+      }
+    }
+
+    if (index >= permission_menu.size()) {
+      return;
+    }
+
+    dispatch_async_f(dispatch_get_main_queue(), reinterpret_cast<void *>(static_cast<std::uintptr_t>(index)), tray_permission_item_request);
+  }
+  #endif
 
   #ifdef SUNSHINE_TESTS
   const struct tray &tray_data_for_testing() {
@@ -856,6 +964,12 @@ namespace system_tray {
       return;
     }
 
+  #ifdef __APPLE__
+    // A stream is exactly when a missing permission becomes visible, and the menu is
+    // known to be closed here, so this is a safe moment to re-read the states.
+    fill_permission_menu(permission_menu);
+  #endif
+
     tray.notification_title = nullptr;
     tray.notification_text = nullptr;
     tray.notification_cb = nullptr;
@@ -878,6 +992,12 @@ namespace system_tray {
       return;
     }
 
+  #ifdef __APPLE__
+    // A stream is exactly when a missing permission becomes visible, and the menu is
+    // known to be closed here, so this is a safe moment to re-read the states.
+    fill_permission_menu(permission_menu);
+  #endif
+
     tray.notification_title = nullptr;
     tray.notification_text = nullptr;
     tray.notification_cb = nullptr;
@@ -899,6 +1019,12 @@ namespace system_tray {
     if (!tray_initialized_state().load()) {
       return;
     }
+
+  #ifdef __APPLE__
+    // A stream is exactly when a missing permission becomes visible, and the menu is
+    // known to be closed here, so this is a safe moment to re-read the states.
+    fill_permission_menu(permission_menu);
+  #endif
 
     tray.notification_title = nullptr;
     tray.notification_text = nullptr;

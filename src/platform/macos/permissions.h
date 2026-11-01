@@ -19,6 +19,7 @@ namespace platf {
      */
     struct permission_state_t {
       std::string key;  ///< Stable identifier, also the `--report` name.
+      std::string name;  ///< Short label for a menu, matching the name macOS uses.
       std::string purpose;  ///< What Lumen needs the permission for.
       std::string action;  ///< What the user has to do, which is not always a switch.
       std::string pane;  ///< System Settings deep link for the matching list.

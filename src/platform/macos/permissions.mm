@@ -113,6 +113,7 @@ namespace platf {
        */
       struct permission_t {
         std::string key;  ///< Stable name written to `--report` files.
+        std::string name;  ///< Short menu label, using the name macOS shows for it.
         std::string purpose;  ///< What Lumen needs this permission for.
         std::string pane;  ///< System Settings deep link for the matching list.
         std::string action;  ///< What the user must do, which is not always flipping a switch.
@@ -135,6 +136,7 @@ namespace platf {
         static const std::vector<permission_t> permissions {
         permission_t {
           "screen_capture",
+          "Screen Recording",
           "capture the desktop for the video stream",
           std::string {k_pane_screen_capture},
           "switch Sunshine/Lumen on in the list",
@@ -147,6 +149,7 @@ namespace platf {
         },
         permission_t {
           "accessibility",
+          "Accessibility",
           "post keyboard, mouse and scroll events",
           std::string {k_pane_accessibility},
           "switch Sunshine/Lumen on in the list",
@@ -159,6 +162,7 @@ namespace platf {
         },
         permission_t {
           "input_monitoring",
+          "Input Monitoring",
           "create the virtual keyboard, mouse and gamepad devices",
           std::string {k_pane_input_monitoring},
           "switch Sunshine/Lumen on in the list",
@@ -171,6 +175,7 @@ namespace platf {
         },
         permission_t {
           "full_disk_access",
+          "Full Disk Access",
           "enumerate displays; without it the display list comes back empty",
           std::string {k_pane_full_disk_access},
           "drag the app (selected in Finder) into the list, then switch it on",
@@ -203,7 +208,7 @@ namespace platf {
     std::vector<permission_state_t> permission_status() {
       std::vector<permission_state_t> status;
       for (const auto &entry: required_permissions()) {
-        status.push_back(permission_state_t {entry.key, entry.purpose, entry.action, entry.pane, entry.granted()});
+        status.push_back(permission_state_t {entry.key, entry.name, entry.purpose, entry.action, entry.pane, entry.granted()});
       }
 
       return status;
