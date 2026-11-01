@@ -92,6 +92,39 @@ macOS inertia timer calibration [16 x 8ms mach_wait_until, this thread] median_o
 A value near 2ms means the schedule is healthy. Anything above 10ms means the service lost the
 key.
 
+## Release DMG
+
+`scripts/macos_build.sh` builds the `.app` bundle and packages it with CPack into
+`cmake-build-macos-app/cpack_artifacts/Sunshine.dmg` (the archive name is hardcoded there). Four
+things about it are not obvious:
+
+- **Signing identity.** Notarization requires a `Developer ID Application` certificate; an `Apple
+  Development` or `Apple Distribution` identity will not do. The keychain profile used for the
+  submission is named in the script, so create it with exactly that name:
+
+  ```sh
+  xcrun notarytool store-credentials notarytool-password \
+    --apple-id you@example.com --team-id TEAMID --password xxxx-xxxx-xxxx-xxxx
+  ```
+
+- **It must run in a GUI login session.** The DragNDrop generator drives Finder through
+  `src_assets/macos/build/dmg-finder-layout.applescript` to lay out the window. In a background
+  launchd session, which is what `launchctl managername` reports as `Background`, that AppleScript
+  hangs after the raw image has been written: observed with a 117MB `temp.dmg` already on disk and
+  `osascript` waiting forever. `tools/macos-dmg/lumen-dmg.command` checks the session first and
+  prints which prerequisite is missing instead of hanging.
+- **FFmpeg.** A bundle build links the patched FFmpeg from `LUMEN_FFMPEG_BUNDLE`, defaulting to
+  `~/lumen-ffmpeg-bundle/bundle/ffmpeg`, which is the same rule `build.sh` uses. Falling back to the
+  published build-deps archive still builds cleanly but drops the frame drain fix, which returns
+  host latency to its old level; the script prints which one it picked.
+- **CI does not build it for `main`.** `ci.yml` is the workflow that calls `ci-macos.yml`, and it
+  triggers on `pull_request`, pushes to `master`, and `workflow_dispatch`. A repository whose
+  default branch is `main` therefore builds nothing on push; dispatch it manually, or widen the
+  trigger. `ci-macos.yml` also needs six secrets that a fresh fork will not have:
+  `APPLE_CODESIGN_IDENTITY`, `APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64`,
+  `APPLE_DEVELOPER_ID_APPLICATION_CERTIFICATE_P12_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID` and
+  `APPLE_NOTARYTOOL_PASSWORD`.
+
 ## Release validation
 
 Automated tests cover legacy audio source selection, HID report mappings,

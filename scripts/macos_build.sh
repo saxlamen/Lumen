@@ -108,6 +108,32 @@ function run_step_cmake() {
     "-DSUNSHINE_ENABLE_TRAY=ON"
   )
 
+  # The frame drain fix lives in a patched FFmpeg, and nothing here fails when it is missing: the
+  # DMG would simply ship the old host latency while still building cleanly. Same selection rule and
+  # the same printed verdict as build.sh, so a bundle build cannot drift from what gets deployed.
+  local ffmpeg_bundle="${LUMEN_FFMPEG_BUNDLE:-$HOME/lumen-ffmpeg-bundle/bundle/ffmpeg}"
+  if [[ "${ffmpeg_bundle}" == "auto" ]]; then
+    echo "==> Building the patched FFmpeg bundle (a few minutes the first time)..."
+    WORK="$HOME/lumen-ffmpeg-bundle" bash "${script_dir}/../third-party/ffmpeg-patches/build-bundle.sh"
+    ffmpeg_bundle="$HOME/lumen-ffmpeg-bundle/bundle/ffmpeg"
+  fi
+  if [[ -f "${ffmpeg_bundle}/lib/libavcodec.a" ]]; then
+    # grep reads a file rather than a pipe: grep -q exits early, which under pipefail would make a
+    # successful match look like a failed pipeline.
+    local drain_symbols
+    drain_symbols="$(mktemp)"
+    strings "${ffmpeg_bundle}/lib/libavcodec.a" > "${drain_symbols}"
+    if grep -q "^frame_drain$" "${drain_symbols}"; then
+      echo "==> FFmpeg: ${ffmpeg_bundle} (frame drain available)"
+    else
+      echo "==> FFmpeg: ${ffmpeg_bundle} (no frame_drain option, host latency stays at the old level)"
+    fi
+    rm -f "${drain_symbols}"
+    cmake_args+=("-DFFMPEG_PREPARED_BINARIES=${ffmpeg_bundle}")
+  else
+    echo "==> FFmpeg: published build-deps archive (no frame drain, host latency stays at the old level)"
+  fi
+
   if [[ -n "${sign_app}" ]]; then
     if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
       cmake_args+=("-DAPPLE_CODESIGN_IDENTITY=${APPLE_CODESIGN_IDENTITY}")
