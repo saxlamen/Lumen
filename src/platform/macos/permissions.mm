@@ -9,6 +9,9 @@
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -23,6 +26,7 @@
 #include <fcntl.h>
 #import <IOKit/hidsystem/IOHIDLib.h>
 #include <mach-o/dyld.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 // local includes
@@ -197,6 +201,49 @@ namespace platf {
 
         return std::string {executable_path};
       }
+
+      /**
+       * @brief A stamp identifying this installation of the app.
+       *
+       * macOS ties a permission decision to the signed identity, so rebuilding or
+       * re-signing the bundle resets what has to be granted. The executable's modification
+       * time is enough to tell "the guide already ran for this build" from "this is a new
+       * build and the permissions underneath it changed".
+       *
+       * @return A stamp for the current executable, or empty if it cannot be read.
+       */
+      std::string installation_stamp() {
+        const auto path = current_executable();
+        struct stat info {};
+        if (path.empty() || ::stat(path.c_str(), &info) != 0) {
+          return {};
+        }
+
+        return std::format("{}:{}", path, static_cast<long long>(info.st_mtime));
+      }
+
+      /**
+       * @brief Where the "the guide already ran" stamp is kept.
+       *
+       * Next to `sunshine.conf`, because that is the directory the user's permissions and
+       * settings already live in, and removing it is a way out for anyone who wants the
+       * first-run behaviour back.
+       *
+       * @return The path, or empty when there is no home directory to put it in.
+       */
+      std::string guide_stamp_path() {
+        const char *xdg = std::getenv("XDG_CONFIG_HOME");
+        const char *home = std::getenv("HOME");
+
+        std::string dir;
+        if (xdg != nullptr && xdg[0] != '\0') {
+          dir = xdg;
+        } else if (home != nullptr && home[0] != '\0') {
+          dir = std::string {home} + "/.config";
+        }
+
+        return dir.empty() ? std::string {} : dir + "/sunshine/permission-guide.stamp";
+      }
     }  // namespace
 
     void ask_missing_permissions() {
@@ -209,6 +256,60 @@ namespace platf {
         }
 
         entry.ask();
+      }
+    }
+
+    void guide_missing_permissions_on_first_run() {
+      // Only the .app has a first run to guide: a Homebrew service or a terminal run
+      // would otherwise throw System Settings at a headless start on every boot.
+      if (current_executable().find("/Contents/MacOS/") == std::string::npos) {
+        return;
+      }
+
+      std::string missing_key;
+      std::string missing_pane;
+      for (const auto &entry : required_permissions()) {
+        if (entry.granted()) {
+          continue;
+        }
+
+        missing_key = entry.key;
+        missing_pane = entry.pane;
+        break;
+      }
+
+      if (missing_key.empty()) {
+        return;
+      }
+
+      // Once per install, because macOS only prompts the first time anyway and a pane
+      // that reappears every launch stops being guidance and becomes a nag. The stamp is
+      // the executable itself, so a rebuild - which resets the permissions underneath the
+      // user - earns a fresh guide.
+      const auto stamp = installation_stamp();
+      const auto stamp_path = guide_stamp_path();
+      if (!stamp.empty() && !stamp_path.empty()) {
+        std::ifstream existing {stamp_path};
+        std::string stored;
+        if (existing && std::getline(existing, stored) && stored == stamp) {
+          BOOST_LOG(info) << "macOS permissions are still missing and the guide already ran for this install, not opening System Settings again"sv;
+          return;
+        }
+      }
+
+      BOOST_LOG(info) << "First run with a missing macOS permission ("sv << missing_key << "), opening its settings pane";
+      platf::open_url(missing_pane);
+      if (missing_key == "full_disk_access") {
+        reveal_installation(current_executable());
+      }
+
+      if (!stamp.empty() && !stamp_path.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path {stamp_path}.parent_path(), ec);
+        std::ofstream handle {stamp_path};
+        if (handle) {
+          handle << stamp;
+        }
       }
     }
 

@@ -279,6 +279,7 @@ int main(int argc, char *argv[]) {
 // no Lumen entry in it, because asking is what creates that entry.
 #ifdef __APPLE__
   platf::macos::ask_missing_permissions();
+  platf::macos::guide_missing_permissions_on_first_run();
 #endif
 
   // Log publisher metadata

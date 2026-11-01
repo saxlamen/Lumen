@@ -38,6 +38,20 @@ namespace platf {
     void ask_missing_permissions();
 
     /**
+     * @brief Open one missing permission's settings pane, once per install.
+     *
+     * The startup ask registers the entries, but a first-time user still has to know to
+     * open System Settings at all. This opens the pane for the first permission that is
+     * missing - one pane, because System Settings reuses a single window - and only for
+     * the .app bundle, so a service run does not open a GUI on every boot. A stamp file
+     * beside `sunshine.conf` keeps it to once per install: macOS prompts only the first
+     * time anyway, and a pane that returns every launch is a nag rather than guidance.
+     * The stamp is the executable, so a rebuild, which resets the permissions, earns a
+     * fresh guide.
+     */
+    void guide_missing_permissions_on_first_run();
+
+    /**
      * @brief Report the macOS permissions Lumen needs, live.
      *
      * The checks have to run in Lumen's own process, and they are re-read on every
