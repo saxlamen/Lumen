@@ -17,15 +17,19 @@ if(DEFINED ENV{TAG})
 endif()
 
 # Check if env vars are defined before attempting to access them, variables will be defined even if blank
-if((DEFINED ENV{BRANCH}) AND (DEFINED ENV{BUILD_VERSION}))  # cmake-lint: disable=W0106
-    if((DEFINED ENV{BRANCH}) AND (NOT $ENV{BUILD_VERSION} STREQUAL ""))
-        # If BRANCH is defined and BUILD_VERSION is not empty, then we are building from CI
-        # If BRANCH is master we are building a push/release build
-        MESSAGE("Got from CI '$ENV{BRANCH}' branch and version '$ENV{BUILD_VERSION}'")
-        set(PROJECT_VERSION $ENV{BUILD_VERSION})
-        string(REGEX REPLACE "^v" "" PROJECT_VERSION ${PROJECT_VERSION})  # remove the v prefix if it exists
-        set(CMAKE_PROJECT_VERSION ${PROJECT_VERSION})  # cpack will use this to set the binary versions
-    endif()
+# so the value has to be the test, not the name. macos_build.sh exports BRANCH together with an empty
+# BUILD_VERSION precisely to say "this is not CI", and testing only DEFINED sent it into the CI branch,
+# where the inner test then rejected the empty version, so neither branch ran and PROJECT_VERSION kept
+# the 0.0.0 default from project(). Info.plist substitutes @PROJECT_VERSION@ and CPack takes its value
+# from the same variable, which is why a bundle built by that script reported version 0.0.0 while the
+# identical source built through build.sh reported the rebased upstream version.
+if((DEFINED ENV{BRANCH}) AND (NOT "$ENV{BUILD_VERSION}" STREQUAL ""))  # cmake-lint: disable=W0106
+    # If BRANCH is defined and BUILD_VERSION is not empty, then we are building from CI
+    # If BRANCH is master we are building a push/release build
+    MESSAGE("Got from CI '$ENV{BRANCH}' branch and version '$ENV{BUILD_VERSION}'")
+    set(PROJECT_VERSION $ENV{BUILD_VERSION})
+    string(REGEX REPLACE "^v" "" PROJECT_VERSION ${PROJECT_VERSION})  # remove the v prefix if it exists
+    set(CMAKE_PROJECT_VERSION ${PROJECT_VERSION})  # cpack will use this to set the binary versions
 else()
     # Generate Sunshine Version based of the git tag
     # https://github.com/nocnokneo/cmake-git-versioning-example/blob/master/LICENSE
