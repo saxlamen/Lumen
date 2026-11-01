@@ -35,6 +35,7 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         ${CORE_AUDIO_LIBRARY}
         ${CORE_MEDIA_LIBRARY}
         ${CORE_VIDEO_LIBRARY}
+        "-framework ServiceManagement"
         ${FOUNDATION_LIBRARY}
         ${IOKIT_LIBRARY}
         ${VIDEO_TOOLBOX_LIBRARY}
@@ -93,6 +94,7 @@ set_source_files_properties(
 target_link_libraries(vd_helper PRIVATE
         "-framework Foundation"
         "-framework AppKit"
+        "-framework ServiceManagement"
         "-framework CoreGraphics"
         "-F/System/Library/PrivateFrameworks"
         "-framework SkyLight")

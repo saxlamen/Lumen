@@ -20,13 +20,16 @@
 #include <AppKit/AppKit.h>
 #include <arpa/inet.h>
 #include <dlfcn.h>
+#include <filesystem>
 #include <Foundation/Foundation.h>
+#include <fstream>
 #include <mach-o/dyld.h>
 #include <mutex>
 #include <net/if_dl.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include <pwd.h>
+#include <ServiceManagement/ServiceManagement.h>
 #include <sys/qos.h>
 
 // lib includes
@@ -384,6 +387,118 @@ namespace platf {
 
       BOOST_LOG(info) << "Now answering quit requests from macOS on behalf of " << class_getName(delegate_class);
     });
+  }
+
+  namespace {
+    /**
+     * @brief The login-item registration for this application, or nil on older systems.
+     *
+     * @return The shared service object, nil if the API or the bundle is unavailable.
+     */
+    SMAppService *autostart_service() {
+      if (@available(macOS 13.0, *)) {
+        return SMAppService.mainAppService;
+      }
+
+      return nil;
+    }
+  }  // namespace
+
+  bool autostart_enabled() {
+    SMAppService *service = autostart_service();
+    if (service == nil) {
+      return false;
+    }
+
+    if (@available(macOS 13.0, *)) {
+      return service.status == SMAppServiceStatusEnabled;
+    }
+
+    return false;
+  }
+
+  bool set_autostart_enabled(const bool enabled) {
+    // Only a bundle can be a login item. A Homebrew binary or a terminal run has no bundle to
+    // register, and registering the bundle that happens to contain a development binary would
+    // start that build on every login.
+    char executable_path[PATH_MAX] {};
+    uint32_t executable_size = sizeof(executable_path);
+    if (_NSGetExecutablePath(executable_path, &executable_size) != 0 || std::string {executable_path}.find("/Contents/MacOS/") == std::string::npos) {
+      return false;
+    }
+
+    SMAppService *service = autostart_service();
+    if (service == nil) {
+      return false;
+    }
+
+    NSError *error = nil;
+    BOOL ok = NO;
+    if (@available(macOS 13.0, *)) {
+      if (enabled) {
+        ok = [service registerAndReturnError:&error];
+      } else if (service.status != SMAppServiceStatusNotRegistered) {
+        ok = [service unregisterAndReturnError:&error];
+      } else {
+        ok = YES;
+      }
+    }
+
+    if (!ok) {
+      BOOST_LOG(warning) << (enabled ? "Could not register the login item" : "Could not remove the login item") << ": "
+                         << (error.localizedDescription.UTF8String ?: "unknown error");
+    }
+
+    return ok ? true : false;
+  }
+
+  void ensure_autostart_default() {
+    // Starting at login is on by default, but only claimed once per installation: registering on
+    // every start would silently undo a user who turned it off in System Settings. The stamp is
+    // the executable itself, so a reinstall or a rebuild - which is when macOS forgets the
+    // registration too - earns a fresh default.
+    char executable_path[PATH_MAX] {};
+    uint32_t executable_size = sizeof(executable_path);
+    if (_NSGetExecutablePath(executable_path, &executable_size) != 0) {
+      return;
+    }
+
+    const std::string path {executable_path};
+    if (path.find("/Contents/MacOS/") == std::string::npos) {
+      return;
+    }
+
+    const auto home = getenv("HOME");
+    if (home == nullptr) {
+      return;
+    }
+
+    const std::string stamp_path = std::string {home} + "/.config/sunshine/autostart.stamp";
+    const auto file = std::filesystem::path {executable_path};
+    std::error_code ec;
+    const auto stamp = path + ":" + std::to_string(static_cast<long long>(std::filesystem::last_write_time(file, ec).time_since_epoch().count()));
+    if (ec) {
+      return;
+    }
+
+    std::ifstream existing {stamp_path};
+    std::string stored;
+    if (existing && std::getline(existing, stored) && stored == stamp) {
+      return;
+    }
+
+    std::filesystem::create_directories(std::filesystem::path {stamp_path}.parent_path(), ec);
+    std::ofstream handle {stamp_path};
+    if (!handle) {
+      return;
+    }
+
+    handle << stamp;
+    handle.close();
+
+    if (!autostart_enabled() && set_autostart_enabled(true)) {
+      BOOST_LOG(info) << "Enabled starting Lumen at login, which can be turned off in the login items of System Settings"sv;
+    }
   }
 
   void restart() {

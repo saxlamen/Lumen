@@ -42,6 +42,7 @@
 #include "nvhttp.h"
 #include "process.h"
 #ifdef __APPLE__
+  #include "platform/macos/misc.h"
   #include "platform/macos/permissions.h"
 #endif
 #include "system_tray.h"
@@ -280,6 +281,10 @@ int main(int argc, char *argv[]) {
 #ifdef __APPLE__
   platf::macos::ask_missing_permissions();
   platf::macos::guide_missing_permissions_on_first_run();
+
+  // Start at login is on for a new installation, once, so that a machine set up for streaming is
+  // ready at the login window without anyone having to find the setting.
+  platf::ensure_autostart_default();
 #endif
 
   // Log publisher metadata

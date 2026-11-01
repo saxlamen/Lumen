@@ -12,6 +12,30 @@
 
 namespace platf {
   /**
+   * @brief Whether macOS is set to start this application at login.
+   * @return True when the login-item registration is enabled.
+   */
+  bool autostart_enabled();
+
+  /**
+   * @brief Turn the login-item registration for this application on or off.
+   *
+   * Only a bundle can be registered, so this does nothing for a command line build.
+   *
+   * @param enabled True to start at login.
+   * @return True when macOS accepted the change.
+   */
+  bool set_autostart_enabled(bool enabled);
+
+  /**
+   * @brief Start this application at login the first time an installation runs.
+   *
+   * The default is on, and it is claimed once per installation so that turning it off sticks
+   * until the application is reinstalled or rebuilt.
+   */
+  void ensure_autostart_default();
+
+  /**
    * @brief Start answering the quit requests macOS sends before relaunching an application.
    *
    * System Settings asks for a quit right after granting a permission, then relaunches the app,
