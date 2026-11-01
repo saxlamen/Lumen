@@ -41,7 +41,7 @@ bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 # 轮询、状态档照常更新，但屏幕上什么都不会出现，看起来就像工具没跑。
 SESSION="$(launchctl managername 2>/dev/null || echo unknown)"
 if [ "$SESSION" != "Aqua" ]; then
-  bold "现在的位置不是登录桌面（工作階段：$SESSION）"
+  bold "现在的位置不是登录桌面（工作階段：${SESSION}）"
   dim "请双击本档案，或在你自己登录的桌面里开「终端机」执行它。"
   dim "从 SSH 跑的话系统设置和授权窗都不会出现，引导会白等好几分钟。"
   exit 1
@@ -65,7 +65,7 @@ else
 fi
 echo
 
-# 跑一次检查，结果写进 $REPORT（key=granted / key=missing）
+# 跑一次检查，结果写进 ${REPORT}（key=granted / key=missing）
 probe() {
   : > "$REPORT"
   if [ "$TARGET" = "app" ]; then
