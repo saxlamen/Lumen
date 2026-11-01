@@ -162,6 +162,7 @@ bold "第 3 步：现在照画面做（系统设置会一项一项开给你）"
 probe --grant --wait "$WAIT_PER_ITEM" || true
 
 active=""
+frozen=0
 previous="$(cat "$REPORT" 2>/dev/null)"
 while pgrep -f "[-]-permissions --report" >/dev/null 2>&1; do   # 字元类别避开 pgrep 找到自己
   current="$(cat "$REPORT" 2>/dev/null)"
@@ -185,6 +186,21 @@ while pgrep -f "[-]-permissions --report" >/dev/null 2>&1; do   # 字元类别�
     now="$(printf '%s\n' "$current" | sed -n "s/^$k=//p")"
     [ "$was" = "missing" ] && [ "$now" = "granted" ] && green "  ✅ ${NAMES[$i]} 好了"
   done
+
+  # report 長時間一動不動＝引導可能卡在系統呼叫裡（或那一項被記成「已拒絕」，
+  # 面板不會再提示）。給提示，不要讓人對著静止的螢幕猜。
+  if [ "$current" = "$previous" ]; then
+    frozen=$((frozen + 1))
+    if [ "$frozen" -eq 45 ]; then
+      dim "  （45 秒没进展。如果面板里没有 Sunshine 这一项：它被记成「已拒绝」了，"
+      dim "    照本档案最后的修法清一次再重跑）"
+    elif [ "$frozen" -ge 180 ]; then
+      dim "  （3 分钟没进展，这边先收尾；剩下的项目照下面列的手动开就好）"
+      break
+    fi
+  else
+    frozen=0
+  fi
 
   previous="$current"
   sleep 1
