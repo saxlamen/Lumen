@@ -10,9 +10,12 @@ extern "C" {
 
 // standard includes
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bitset>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <list>
@@ -2042,6 +2045,232 @@ namespace input {
     }
   }
 
+  namespace {
+
+    /**
+     * @brief Windowed counters comparing arriving scroll packets with injected scroll events.
+     *
+     * Moonlight scroll packets are mergeable, so a backed-up input queue folds several packets
+     * into a single platform event (see passthrough_next_message()). These counters tell the
+     * client arrival rhythm and the injected rhythm apart, which decides whether a stutter comes
+     * from the client or from host-side batching.
+     */
+    struct scroll_census_t {
+      std::atomic<uint64_t> received {0};  ///< Scroll packets accepted from the client.
+      std::atomic<uint64_t> received_gap_samples {0};  ///< Number of measured arrival intervals.
+      std::atomic<uint64_t> received_gap_total_us {0};  ///< Sum of arrival intervals in microseconds.
+      std::atomic<uint64_t> received_gap_max_us {0};  ///< Largest arrival interval in microseconds.
+      std::atomic<uint64_t> received_ns {0};  ///< Monotonic timestamp of the last accepted packet.
+      std::atomic<uint64_t> injected {0};  ///< Scroll events handed to the platform backend.
+      std::atomic<uint64_t> injected_gap_samples {0};  ///< Number of measured injection intervals.
+      std::atomic<uint64_t> injected_gap_total_us {0};  ///< Sum of injection intervals in microseconds.
+      std::atomic<uint64_t> injected_gap_max_us {0};  ///< Largest injection interval in microseconds.
+      std::atomic<uint64_t> injected_ns {0};  ///< Monotonic timestamp of the last injected event.
+      std::atomic<uint64_t> merged_away {0};  ///< Packets folded into another packet by batch().
+      std::atomic<uint64_t> window_ns {0};  ///< Monotonic timestamp where the current report window began.
+      std::mutex report_lock;  ///< Keeps one report per window.
+
+      /**
+       * @brief Inter-arrival histogram for one side of the pipeline.
+       *
+       * Bucket edges in milliseconds are 4, 8, 12, 16, 25, 33 and 50, so a stream paced by a
+       * 60Hz or 30Hz clock is told apart from one that arrives in bursts after a long stall.
+       * A mean alone cannot separate those two, and they need different fixes.
+       */
+      struct gap_histogram_t {
+        std::array<std::atomic<uint64_t>, 8> buckets;  ///< Counts per interval bucket.
+
+        /// Record one interval sample in the bucket it falls into.
+        void record(uint64_t value_us) {
+          static constexpr uint64_t edges[] {4000, 8000, 12000, 16000, 25000, 33000, 50000};
+          std::size_t bucket = 0;
+          while (bucket + 1 < std::size(edges) && value_us >= edges[bucket]) {
+            ++bucket;
+          }
+          buckets[bucket].fetch_add(1, std::memory_order_relaxed);
+        }
+
+        /// Read and reset all bucket counts.
+        std::array<uint64_t, 8> drain() {
+          std::array<uint64_t, 8> drained {};
+          for (std::size_t bucket = 0; bucket < buckets.size(); ++bucket) {
+            drained[bucket] = buckets[bucket].exchange(0);
+          }
+          return drained;
+        }
+      };
+
+      gap_histogram_t received_histogram;  ///< Interval buckets for packets arriving from the client.
+      gap_histogram_t injected_histogram;  ///< Interval buckets for events handed to the platform.
+    };
+
+    scroll_census_t scroll_census;
+
+    /**
+     * @brief Read the monotonic clock in nanoseconds for census intervals.
+     * @return Nanoseconds since the monotonic clock epoch.
+     */
+    uint64_t census_now_ns() {
+      return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()
+      );
+    }
+
+    /**
+     * @brief Whether scroll census logging is on.
+     *
+     * Shares the smooth-scrolling diagnostics switch (macos_smooth_scrolling_diagnostics, or the
+     * LUMEN_SCROLL_DIAGNOSTICS environment variable) so one setting turns on every scroll probe.
+     * Cached because it is consulted for every scroll packet.
+     * @return True when census lines should be written.
+     */
+    bool scroll_census_enabled() {
+      static const bool enabled = config::input.macos_smooth_scrolling_diagnostics || std::getenv("LUMEN_SCROLL_DIAGNOSTICS") != nullptr;
+      return enabled;
+    }
+
+    /**
+     * @brief Whether a packet magic describes vertical or horizontal scroll input.
+     *
+     * @param magic Packet magic already converted to host byte order.
+     * @return True for scroll packets.
+     */
+    bool is_scroll_magic(int magic) {
+      return magic == SCROLL_MAGIC_GEN5 || magic == SS_HSCROLL_MAGIC;
+    }
+
+    /**
+     * @brief Merge one interval sample into a count/sum/maximum triple.
+     *
+     * @param samples Counter of samples.
+     * @param total Running sum in microseconds.
+     * @param maximum Running maximum in microseconds.
+     * @param value_us Sample interval in microseconds.
+     */
+    void census_record_interval(std::atomic<uint64_t> &samples, std::atomic<uint64_t> &total, std::atomic<uint64_t> &maximum, uint64_t value_us) {
+      samples.fetch_add(1, std::memory_order_relaxed);
+      total.fetch_add(value_us, std::memory_order_relaxed);
+      auto previous_max = maximum.load(std::memory_order_relaxed);
+      while (value_us > previous_max && !maximum.compare_exchange_weak(previous_max, value_us, std::memory_order_relaxed)) {
+      }
+    }
+
+    /**
+     * @brief Emit and reset the census counters, at most once per second of scroll activity.
+     */
+    void report_scroll_census() {
+      if (!scroll_census_enabled()) {
+        return;
+      }
+
+      const auto now_ns = census_now_ns();
+      auto window_ns = scroll_census.window_ns.load(std::memory_order_relaxed);
+      if (window_ns == 0) {
+        scroll_census.window_ns.store(now_ns, std::memory_order_relaxed);
+        return;
+      }
+      if (now_ns - window_ns < 1'000'000'000) {
+        return;
+      }
+
+      std::lock_guard<std::mutex> lock(scroll_census.report_lock);
+      const auto received = scroll_census.received.exchange(0);
+      const auto injected = scroll_census.injected.exchange(0);
+      const auto merged_away = scroll_census.merged_away.exchange(0);
+      const auto received_samples = scroll_census.received_gap_samples.exchange(0);
+      const auto received_total_us = scroll_census.received_gap_total_us.exchange(0);
+      const auto received_max_us = scroll_census.received_gap_max_us.exchange(0);
+      const auto injected_samples = scroll_census.injected_gap_samples.exchange(0);
+      const auto injected_total_us = scroll_census.injected_gap_total_us.exchange(0);
+      const auto injected_max_us = scroll_census.injected_gap_max_us.exchange(0);
+      const auto window_seconds = static_cast<double>(now_ns - window_ns) / 1'000'000'000.0;
+      scroll_census.window_ns.store(now_ns, std::memory_order_relaxed);
+
+      if (received == 0 && injected == 0) {
+        return;
+      }
+
+      const auto received_gap_mean_ms = received_samples ? static_cast<double>(received_total_us) / received_samples / 1000.0 : 0.0;
+      const auto injected_gap_mean_ms = injected_samples ? static_cast<double>(injected_total_us) / injected_samples / 1000.0 : 0.0;
+      // Packets actually consumed in this window = one per injected event, plus the ones folded away.
+      const auto packets_per_event = injected ? 1.0 + static_cast<double>(merged_away) / static_cast<double>(injected) : 0.0;
+
+      const auto received_buckets = scroll_census.received_histogram.drain();
+      const auto injected_buckets = scroll_census.injected_histogram.drain();
+
+      BOOST_LOG(info)
+        << "Scroll census ["sv << window_seconds << "s]: client packets="sv << received
+        << " avg_gap="sv << received_gap_mean_ms << "ms max_gap="sv << static_cast<double>(received_max_us) / 1000.0 << "ms"
+        << " | injected events="sv << injected
+        << " avg_gap="sv << injected_gap_mean_ms << "ms max_gap="sv << static_cast<double>(injected_max_us) / 1000.0 << "ms"
+        << " | packets_per_event="sv << packets_per_event
+        << " merged_away="sv << merged_away;
+
+      // Bucket edges in milliseconds: <4, 4-8, 8-12, 12-16, 16-25, 25-33, 33-50, >50.
+      // One BOOST_LOG statement is one log record, so the joined buckets are assembled into a
+      // single string first; streaming them from a loop would emit one line per bucket.
+      std::string gap_report {"Scroll census gaps [ms <4/4-8/8-12/12-16/16-25/25-33/33-50/>50]:"};
+      const std::pair<std::string_view, const std::array<uint64_t, 8> &> sides[] {
+        {"client", received_buckets},
+        {"injected", injected_buckets},
+      };
+      for (const auto &[name, buckets] : sides) {
+        gap_report += " ";
+        gap_report += name;
+        gap_report += "=";
+        for (std::size_t bucket = 0; bucket < buckets.size(); ++bucket) {
+          if (bucket != 0) {
+            gap_report += '/';
+          }
+          gap_report += std::to_string(buckets[bucket]);
+        }
+      }
+      BOOST_LOG(info) << gap_report;
+    }
+
+    /**
+     * @brief Record one scroll packet accepted from the client, before batching.
+     */
+    void note_scroll_packet_received() {
+      if (!scroll_census_enabled()) {
+        return;
+      }
+      const auto now_ns = census_now_ns();
+      const auto previous_ns = scroll_census.received_ns.exchange(now_ns, std::memory_order_relaxed);
+      if (previous_ns != 0) {
+        const auto gap_us = (now_ns - previous_ns) / 1000;
+        census_record_interval(scroll_census.received_gap_samples, scroll_census.received_gap_total_us, scroll_census.received_gap_max_us, gap_us);
+        scroll_census.received_histogram.record(gap_us);
+      }
+      scroll_census.received.fetch_add(1, std::memory_order_relaxed);
+      report_scroll_census();
+    }
+
+    /**
+     * @brief Record one scroll event handed to the platform backend after batching.
+     *
+     * @param merged_away Count of extra packets folded into this event.
+     */
+    void note_scroll_event_injected(uint64_t merged_away) {
+      if (!scroll_census_enabled()) {
+        return;
+      }
+      const auto now_ns = census_now_ns();
+      const auto previous_ns = scroll_census.injected_ns.exchange(now_ns, std::memory_order_relaxed);
+      if (previous_ns != 0) {
+        const auto gap_us = (now_ns - previous_ns) / 1000;
+        census_record_interval(scroll_census.injected_gap_samples, scroll_census.injected_gap_total_us, scroll_census.injected_gap_max_us, gap_us);
+        scroll_census.injected_histogram.record(gap_us);
+      }
+      scroll_census.injected.fetch_add(1, std::memory_order_relaxed);
+      if (merged_away != 0) {
+        scroll_census.merged_away.fetch_add(merged_away, std::memory_order_relaxed);
+      }
+      report_scroll_census();
+    }
+
+  }  // namespace
+
   /**
    * @brief Called on a thread pool thread to process an input message.
    * @param input The input context pointer.
@@ -2050,6 +2279,7 @@ namespace input {
     // 'entry' backs the 'payload' pointer, so they must remain in scope together
     std::vector<uint8_t> entry;
     PNV_INPUT_HEADER payload;
+    uint64_t scroll_merged_away = 0;  ///< Scroll packets folded into the one being sent.
 
     // Lock the input queue while batching, but release it before sending
     // the input to the OS. This avoids potentially lengthy lock contention
@@ -2078,6 +2308,12 @@ namespace input {
           // Stop batching
           break;
         } else if (batch_result == batch_result_e::batched) {
+          if (is_scroll_magic(util::endian::little(payload->magic))) {
+            // This scroll packet's motion is now part of the event above, and its own
+            // intermediate position is gone.
+            ++scroll_merged_away;
+          }
+
           // Erase this entry since it was batched
           i = input->input_queue.erase(i);
         } else {
@@ -2089,6 +2325,10 @@ namespace input {
 
     // Print the final input packet
     input::print((void *) payload);
+
+    if (is_scroll_magic(util::endian::little(payload->magic))) {
+      note_scroll_event_injected(scroll_merged_away);
+    }
 
     // Send the batched input to the OS
     switch (util::endian::little(payload->magic)) {
@@ -2157,6 +2397,10 @@ namespace input {
         BOOST_LOG(warning) << "Dropping malformed input packet with actual size ["sv << input_data.size() << ']';
       }
       return;
+    }
+
+    if (is_scroll_magic(util::endian::little(header.magic))) {
+      note_scroll_packet_received();
     }
 
     {
