@@ -62,6 +62,17 @@ if [ "$SESSION" != "Aqua" ] && [ "${LUMEN_PERMS_ALLOW_ANY_SESSION:-0}" != "1" ];
   exit 1
 fi
 
+# ── 收掉残留的引导实例 ─────────────────────────────────────────────────────
+# 上一次跑到一半没结束的引导实例会把 TCC 要求握在那里没人答复，超时后 macOS 把它
+# 结算成「已拒绝」；之后不但不会再弹窗，连面板清单里都不会列出 Sunshine。
+stale="$(pgrep -f -- '-[-]permissions --report' | tr '\n' ' ')"
+if [ -n "$stale" ]; then
+  dim "发现上次没结束的引导实例（pid: ${stale}），先收掉——不然它们会把授权要求握在手里。"
+  pkill -f -- '-[-]permissions --report' 2>/dev/null
+  sleep 1
+fi
+echo
+
 # ── 挑出要检查的安装 ────────────────────────────────────────────────────────
 TARGET=""
 if [ -d "$APP" ]; then
@@ -207,6 +218,17 @@ done
 echo
 dim "如果列表里已经有 Sunshine 但开关是关的：打开它；macOS 可能要求先结束 Sunshine，"
 dim "就照它做，然后再开一次开关并重启 Sunshine，接着重跑本工具。"
+dim "如果面板里连 Sunshine 都看不到：它被记成「已拒绝」了（要求没被答复就会这样结算，"
+dim "比如引导实例跑到一半没结束）。已拒绝的状态 macOS 不再弹窗、清单也不列出来，要这样清："
+echo
+echo "       1. 菜单栏 Sunshine 图标 → Quit"
+echo "       2. tccutil reset All dev.lizardbyte.app.Sunshine"
+dim "          （只想清一项就换服务名：ScreenCapture / Accessibility / ListenEvent /"
+dim "            SystemPolicyAllFiles，例如 tccutil reset Accessibility dev.lizardbyte.app.Sunshine）"
+echo "       3. 到「应用程序」双击 Sunshine —— 它会重新提出要求，这时弹窗才会出现 → 按【允许】"
+dim "          （屏幕录制也可以在面板里按左下角「+」手动选 Sunshine.app）"
+echo "       4. 再跑本工具"
+echo
 dim "如果列表里出现的是「bash」或「Terminal」：那是以前从别的身份跑造成的，"
 dim "选中它按「−」删掉，再用本工具（app 那条路）重跑。"
 exit 1
