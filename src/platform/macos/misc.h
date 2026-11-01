@@ -12,6 +12,13 @@
 
 namespace platf {
   /**
+   * @brief Whether this system can register the application as a login item.
+   *
+   * @return True on systems with the login-item registration API, false on older macOS.
+   */
+  bool autostart_supported();
+
+  /**
    * @brief Whether macOS is set to start this application at login.
    * @return True when the login-item registration is enabled.
    */

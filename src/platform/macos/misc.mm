@@ -404,6 +404,10 @@ namespace platf {
     }
   }  // namespace
 
+  bool autostart_supported() {
+    return autostart_service() != nil;
+  }
+
   bool autostart_enabled() {
     SMAppService *service = autostart_service();
     if (service == nil) {

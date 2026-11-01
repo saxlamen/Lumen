@@ -340,6 +340,13 @@ namespace system_tray {
   void tray_permission_item_cb(struct tray_menu *item);
 
   /**
+   * @brief Handle a click on the start-at-login item.
+   *
+   * @param item The clicked submenu item.
+   */
+  void tray_autostart_item_cb(struct tray_menu *item);
+
+  /**
    * @brief Fill a permission submenu from what macOS says right now.
    *
    * Each permission is its own item, because System Settings reuses a single window: a
@@ -357,7 +364,7 @@ namespace system_tray {
 
     const auto status = platf::macos::permission_status();
     std::size_t index = 0;
-    for (; index < status.size() && index + 2 < menu.size(); ++index) {
+    for (; index < status.size() && index + 3 < menu.size(); ++index) {
       set_permission_menu_item(
         menu,
         index,
@@ -365,6 +372,21 @@ namespace system_tray {
         false,
         tray_permission_item_cb
       );
+    }
+
+    // Starting at login lives here too because the menu is where a user looks for both, and it
+    // is a macOS integration like the permissions rather than a setting of the stream itself.
+    // Older systems have no registration API, so the item is left out entirely rather than shown
+    // as an "Off" that can never be turned on.
+    if (platf::autostart_supported() && index + 2 < menu.size()) {
+      set_permission_menu_item(
+        menu,
+        index,
+        std::format("Start at login - {}", platf::autostart_enabled() ? "On" : "Off"),
+        false,
+        tray_autostart_item_cb
+      );
+      ++index;
     }
 
     // Most grants only apply to a process that starts over, and a menu that says
@@ -472,6 +494,42 @@ namespace system_tray {
    *
    * @param item The clicked submenu item.
    */
+  void tray_autostart_item_request(void *context);
+
+  /**
+   * @brief Handle a click on the start-at-login item.
+   *
+   * @param item The clicked submenu item, unused because there is only one such item.
+   */
+  void tray_autostart_item_cb(struct tray_menu *item) {
+    dispatch_async_f(dispatch_get_main_queue(), nullptr, tray_autostart_item_request);
+  }
+
+  /**
+   * @brief Turn start at login on or off, then republish the menu label.
+   *
+   * Runs on the main queue: the registration is owned by the system's login-item database, which
+   * the app's UI layer talks to, and this process learned the hard way that doing that kind of
+   * work from a worker thread costs the menu bar item.
+   *
+   * @param context Unused.
+   */
+  void tray_autostart_item_request(void *context) {
+    const bool was_enabled = platf::autostart_enabled();
+    BOOST_LOG(info) << "Toggling start at login from the system tray: turning "sv << (was_enabled ? "off" : "on");
+
+    if (!platf::set_autostart_enabled(!was_enabled)) {
+      BOOST_LOG(warning) << "macOS did not accept the start-at-login change"sv;
+    }
+
+    // The click already closed the menu, so rebuilding it here is safe.
+    const std::scoped_lock lock(tray_state_mutex());
+    if (tray_initialized_state().load()) {
+      fill_permission_menu(permission_menu);
+      tray_update(&tray);
+    }
+  }
+
   void tray_permission_item_cb(struct tray_menu *item) {
     const auto *first = permission_menu.data();
     std::size_t index = 0;
