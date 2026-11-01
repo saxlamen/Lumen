@@ -32,10 +32,10 @@
 
 // local includes
 #include "misc.h"
-#include "virtual_display.h"
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "virtual_display.h"
 
 using namespace std::literals;
 namespace fs = std::filesystem;
@@ -317,6 +317,10 @@ namespace platf {
     const pid_t parent_pid = getpid();
     const char *home = getenv("HOME");
 
+    char executable[2048] = {};
+    uint32_t size = sizeof(executable);
+    const bool has_executable = (_NSGetExecutablePath(executable, &size) == 0);
+
     std::string plist_path;
     std::string service_label;
     if (home != nullptr) {
@@ -335,9 +339,18 @@ namespace platf {
       service_label = "sh.brew.lumen";
     }
 
-    char executable[2048] = {};
-    uint32_t size = sizeof(executable);
-    const bool has_executable = (_NSGetExecutablePath(executable, &size) == 0);
+    // The launchd job this function can restart is the Homebrew command line service, which is
+    // a different binary from the app bundle. A bundle opened from Finder has no launchd job
+    // behind it, so bootstrapping that service would hand the ports to the command line build
+    // and then exit, never bringing the app back - which reads as the menu bar icon dying the
+    // moment someone presses Restart. Running from inside a bundle is what separates the two:
+    // the service executes a bare binary under /opt/homebrew, so an executable in
+    // Contents/MacOS is never that job, whichever launchd session happened to spawn it.
+    if (!plist_path.empty() && has_executable && strstr(executable, "/Contents/MacOS/") != nullptr) {
+      BOOST_LOG(info) << "Restart: this is an app bundle, not the command line service, relaunching the bundle"sv;
+      plist_path.clear();
+      service_label.clear();
+    }
 
     const pid_t pid = fork();
     if (pid < 0) {
