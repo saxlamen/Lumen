@@ -25,12 +25,13 @@ API_AVAILABLE(macos(12.3))
 /// object asks for 0, which is the behaviour this platform has always had.
 @property (nonatomic, assign) NSInteger captureDynamicRange;
 
-/// The color space captured frames are tagged with, normally `kCGColorSpaceITUR_2100_PQ`. The dynamic
-/// range above is not enough by itself: without an explicit Rec.2100 color space ScreenCaptureKit
-/// returns frames tagged with the display's SDR ICC profile, which is a silent failure rather than an
-/// error. Measured in section 10.2 of `docs/macos_hdr.md`. This is set once while the capture object is
-/// being created and never changes, so the capture path reads it without the state lock.
-@property (nonatomic, copy, nullable) NSString *hdrColorSpaceName;
+/// The color space captured frames are tagged with, normally `kCGColorSpaceITUR_2100_PQ`, and nil when
+/// no color space is to be set. The dynamic range above is not enough by itself: without an explicit
+/// Rec.2100 color space ScreenCaptureKit returns frames tagged with the display's SDR ICC profile,
+/// which is a silent failure rather than an error. Measured in section 10.2 of `docs/macos_hdr.md`.
+/// This is set once while the capture object is being created and never changes, so the capture path
+/// reads it without the state lock.
+@property (nonatomic, copy) NSString *hdrColorSpaceName;
 @property (nonatomic, assign) int frameWidth;
 @property (nonatomic, assign) int frameHeight;
 @property (nonatomic, assign) BOOL captureAudio;
