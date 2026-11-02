@@ -59,11 +59,11 @@ echo "==> Checking build directory: $BUILD_DIR"
 # The patched bundle is what carries the frame drain improvement, and nothing about a build fails
 # when it is missing, so the choice is made here and printed. grep reads a file rather than a pipe:
 # grep -q exits early, which under pipefail makes a successful match look like a failed pipeline.
-FFMPEG_BUNDLE="${LUMEN_FFMPEG_BUNDLE:-$HOME/lumen-ffmpeg-bundle/bundle/ffmpeg}"
+FFMPEG_BUNDLE="${LUMEN_FFMPEG_BUNDLE:-$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg}"
 if [[ "$FFMPEG_BUNDLE" == "auto" ]]; then
   echo "==> Building the patched FFmpeg bundle (this takes a few minutes the first time)..."
-  WORK="$HOME/lumen-ffmpeg-bundle" bash "$REPO_DIR/third-party/ffmpeg-patches/build-bundle.sh"
-  FFMPEG_BUNDLE="$HOME/lumen-ffmpeg-bundle/bundle/ffmpeg"
+  WORK="$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle" bash "$REPO_DIR/third-party/ffmpeg-patches/build-bundle.sh"
+  FFMPEG_BUNDLE="$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg"
 fi
 
 FFMPEG_CMAKE_ARGS=()

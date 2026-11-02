@@ -1,12 +1,12 @@
 #!/bin/bash
-# 把 ~/Desktop/scroll-data 裡的所有記錄放在一起比（或只比指定的幾個）。
+# 把 var/scroll-data 裡的所有記錄放在一起比（或只比指定的幾個）。
 #
 #   雙擊 / 直接執行   → 比全部記錄
 #   ./lumen-scroll-compare.command lumen_*.csv native_*.csv   → 只比這幾個
 #   ./lumen-scroll-compare.command --gestures                → 連每個手勢的明細一起列
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-DIR="$HOME/Desktop/scroll-data"
+DIR="${LUMEN_SCROLL_DATA:-$HOME/Scripts/Lumen/var/scroll-data}"
 SCRIPT="$SCRIPT_DIR/lumen-scroll-compare.py"
 
 if [ ! -f "$SCRIPT" ]; then

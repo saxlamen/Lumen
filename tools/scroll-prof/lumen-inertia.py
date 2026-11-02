@@ -19,7 +19,7 @@ import statistics as st
 import sys
 from collections import Counter
 
-CSV_GLOB = os.path.expanduser("~/Desktop/scroll-data/lumen_*.csv")
+CSV_GLOB = os.path.expanduser("~/Scripts/Lumen/var/scroll-data/lumen_*.csv")
 LOG_GLOB = os.path.expanduser("~/.config/sunshine/sunshine.log*")
 
 GOOD = "✅"

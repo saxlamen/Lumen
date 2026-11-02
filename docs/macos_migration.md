@@ -168,7 +168,7 @@ things about it are not obvious:
   `osascript` waiting forever. `tools/macos-dmg/lumen-dmg.command` checks the session first and
   prints which prerequisite is missing instead of hanging.
 - **FFmpeg.** A bundle build links the patched FFmpeg from `LUMEN_FFMPEG_BUNDLE`, defaulting to
-  `~/lumen-ffmpeg-bundle/bundle/ffmpeg`, which is the same rule `build.sh` uses. Falling back to the
+  `~/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg`, which is the same rule `build.sh` uses. Falling back to the
   published build-deps archive still builds cleanly but drops the frame drain fix, which returns
   host latency to its old level; the script prints which one it picked.
 - **CI does not build it for `main`.** `ci.yml` is the workflow that calls `ci-macos.yml`, and it

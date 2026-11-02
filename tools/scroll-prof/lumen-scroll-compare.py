@@ -8,7 +8,7 @@ lumen-scroll-compare.py — 比較原生 / Lumen / RustDesk 的 scroll 事件剖
 尾韻被切斷時的跳變、每步速度變化（jerk）。
 
 用法：
-  python3 lumen-scroll-compare.py                    # 自動讀 ~/Desktop/scroll-data/*.csv
+  python3 lumen-scroll-compare.py                    # 自動讀 var/scroll-data（桌面有軟鏈）/*.csv
   python3 lumen-scroll-compare.py a.csv b.csv        # 只比這幾個
   python3 lumen-scroll-compare.py --gestures a.csv   # 多列每個手勢的明細 + 速度曲線
   python3 lumen-scroll-compare.py --json a.csv       # 機器可讀輸出
@@ -602,16 +602,16 @@ def print_run_detail(run):
 
 def main():
     ap = argparse.ArgumentParser(description="比較 scroll 事件剖面")
-    ap.add_argument("files", nargs="*", help="CSV 檔（預設讀 ~/Desktop/scroll-data/*.csv）")
+    ap.add_argument("files", nargs="*", help="CSV 檔（預設讀 var/scrollll-data/*.csv）")
     ap.add_argument("--gestures", action="store_true", help="列出每個手勢明細")
     ap.add_argument("--bin-ms", type=float, default=None, help="測速窗口 ms（預設用記錄到的更新率）")
     ap.add_argument("--json", action="store_true", help="輸出 JSON")
     args = ap.parse_args()
 
-    files = args.files or sorted(glob.glob(os.path.expanduser("~/Desktop/scroll-data/*.csv")),
+    files = args.files or sorted(glob.glob(os.path.expanduser("~/Scripts/Lumen/var/scrollop/scroll-data/*.csv")),
                                  key=os.path.getmtime)
     if not files:
-        print("找不到 CSV。先跑 ~/Desktop/lumen-scroll-profile.command 記錄。")
+        print("找不到 CSV。先跑 tools/scroll-prof/lumen-scroll-profile.command 記錄。")
         return 1
 
     runs = []

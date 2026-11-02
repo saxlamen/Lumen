@@ -111,11 +111,11 @@ function run_step_cmake() {
   # The frame drain fix lives in a patched FFmpeg, and nothing here fails when it is missing: the
   # DMG would simply ship the old host latency while still building cleanly. Same selection rule and
   # the same printed verdict as build.sh, so a bundle build cannot drift from what gets deployed.
-  local ffmpeg_bundle="${LUMEN_FFMPEG_BUNDLE:-$HOME/lumen-ffmpeg-bundle/bundle/ffmpeg}"
+  local ffmpeg_bundle="${LUMEN_FFMPEG_BUNDLE:-$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg}"
   if [[ "${ffmpeg_bundle}" == "auto" ]]; then
     echo "==> Building the patched FFmpeg bundle (a few minutes the first time)..."
-    WORK="$HOME/lumen-ffmpeg-bundle" bash "${script_dir}/../third-party/ffmpeg-patches/build-bundle.sh"
-    ffmpeg_bundle="$HOME/lumen-ffmpeg-bundle/bundle/ffmpeg"
+    WORK="$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle" bash "${script_dir}/../third-party/ffmpeg-patches/build-bundle.sh"
+    ffmpeg_bundle="$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg"
   fi
   if [[ -f "${ffmpeg_bundle}/lib/libavcodec.a" ]]; then
     # grep reads a file rather than a pipe: grep -q exits early, which under pipefail would make a

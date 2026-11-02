@@ -1,0 +1,30 @@
+diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
+index cb3571c..ef7978a 100644
+--- a/libavcodec/videotoolboxenc.c
++++ b/libavcodec/videotoolboxenc.c
+@@ -2556,6 +2556,25 @@ static av_cold int vtenc_frame(
+             vtctx->dts_delta = frame->pts - vtctx->first_pts;
+         }
+ 
++        /* The generic encode layer hands this callback exactly one submitted frame per call,
++         * and vtenc_q_pop() below takes at most one completed sample without waiting. A
++         * completion that lands after this point therefore costs one frame of latency forever:
++         * every later call exchanges one submit for one packet and can never catch up, so the
++         * queue depth is monotonic for the rest of the session. Asking VideoToolbox to finish
++         * everything up to the previous frame keeps the queue non-empty while the newest frame
++         * stays inside the encoder, so that encode still overlaps the next submit. Low latency
++         * mode is required because callers there already expect one-in-one-out behaviour. */
++        if ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) && vtctx->frame_ct_in > 0) {
++            CMTime drain_time = CMTimeMake((frame->pts - 1) * avctx->time_base.num,
++                                           avctx->time_base.den);
++            status = VTCompressionSessionCompleteFrames(vtctx->session, drain_time);
++            if (status) {
++                av_log(avctx, AV_LOG_DEBUG,
++                       "Draining the previous frame returned %d\n", status);
++            }
++            status = 0;
++        }
++
+         vtctx->frame_ct_in++;
+     } else if(!vtctx->flushing) {
+         vtctx->flushing = true;

@@ -29,7 +29,7 @@ STAMP="$CACHE/scrollprof.swift.built"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 # 記錄一律落在桌面，分析器就在旁邊（repo: tools/scroll-prof）。
-OUTDIR="$HOME/Desktop/scroll-data"
+OUTDIR="${LUMEN_SCROLL_DATA:-$HOME/Scripts/Lumen/var/scroll-data}"
 ANALYZER="$SCRIPT_DIR/lumen-scroll-compare.py"
 
 mkdir -p "$CACHE" "$OUTDIR"
@@ -315,7 +315,7 @@ guard !created.isEmpty else {
 let formatter = DateFormatter()
 formatter.dateFormat = "yyyyMMdd-HHmmss"
 let stamp = formatter.string(from: Date())
-let outPath = ("~/Desktop/scroll-data/\(label)_\(stamp).csv" as NSString).expandingTildeInPath
+let outPath = ("~/Scripts/Lumen/var/scroll-data/\(label)_\(stamp).csv" as NSString).expandingTildeInPath
 
 print("記錄中：label=\(label)  時間軸 tap=\(created.joined(separator: "+"))  \(Int(duration)) 秒")
 if drill {

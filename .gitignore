@@ -57,3 +57,9 @@ node_modules/
 *.pyc
 .venv/
 venv/
+
+# Local state for the tools under tools/ (recordings, scratch output); never publish.
+/var/
+
+# Large build inputs and experiment trees (patched FFmpeg bundle, VideoToolbox poc); never publish.
+/deps/
