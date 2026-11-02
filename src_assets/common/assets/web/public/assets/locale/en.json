@@ -169,6 +169,8 @@
     "bind_address_desc": "Set an IP address that exists on this host. An IPv4 address works with either address-family mode; an IPv6 address requires dual-stack mode. If left blank, Sunshine will bind to all available addresses for the configured address family.",
     "capture": "Force a Specific Capture Method",
     "capture_desc": "On automatic mode Sunshine will use the first one that works. NvFBC requires patched nvidia drivers.",
+    "capture_dynamic_range_macos": "macOS HDR Capture",
+    "capture_dynamic_range_macos_desc": "Choose the dynamic range the screen capture asks ScreenCaptureKit for: sdr, hdr_canonical or hdr_local. hdr_canonical is the Rec.2100 PQ picture a remote client expects, hdr_local is the picture tuned to the host panel, and sdr is what this platform captured before. HDR needs Apple Silicon on macOS 15 or newer, a display whose extended dynamic range headroom is above 1.0, and a client that selected a 10 bit dynamic range; otherwise the host logs the reason and captures sdr. Set it in sunshine.conf, and see docs/macos_hdr.md for the measurements behind it.",
     "category_advanced": "Advanced",
     "category_amd_amf_encoder": "AMD AMF Encoder",
     "category_audio_video": "Audio/Video",

@@ -132,6 +132,14 @@ namespace config {
 
       int vt_low_latency {1};  ///< Whether VideoToolbox sessions request low-delay (low-latency rate control) encoding.
       int vt_drain {1};  ///< Drain completed VideoToolbox frames every N submissions; 0 leaves the encoder asynchronous.
+
+      /**
+       * @brief The dynamic range to ask ScreenCaptureKit for on macOS: `sdr`, `hdr_local` or `hdr_canonical`.
+       *
+       * macOS has no HDR display-mode API, so this switch plus the captured screen's EDR headroom is what
+       * makes a stream HDR; see section 11 of `docs/macos_hdr.md`.
+       */
+      std::string capture_dynamic_range_macos {"sdr"};
     } vt;  ///< VideoToolbox encoder options.
 
     struct {

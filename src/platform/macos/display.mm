@@ -3,7 +3,9 @@
  * @brief Definitions for display capture on macOS.
  */
 // system includes
+#include <cmath>
 #include <cstring>
+#include <sys/sysctl.h>
 
 // local includes
 #include "src/config.h"
@@ -12,6 +14,7 @@
 #include "src/platform/macos/av_img_t.h"
 #include "src/platform/macos/av_video.h"
 #include "src/platform/macos/capture_guard.h"
+#include "src/platform/macos/hdr_capture.h"
 #include "src/platform/macos/misc.h"
 #include "src/platform/macos/nv12_zero_device.h"
 #include "src/utility.h"
@@ -252,9 +255,134 @@ namespace platf {
 
   // ── ScreenCaptureKit capture backend (macOS 12.3+) ──────────────────
 
+  /**
+   * @brief Look up how much EDR headroom the screen being captured can reach.
+   *
+   * macOS reports HDR capability per screen rather than per display mode, and there is no public API
+   * that puts a display into HDR mode, so this is the only query available for deciding whether a
+   * captured picture carries HDR. A screen that cannot do HDR at all reports 1.0, measured in
+   * section 10.1 of `docs/macos_hdr.md`.
+   *
+   * @param display_id The CoreGraphics display being captured.
+   * @return The AppKit screen's maximum potential EDR headroom, or 1.0 when the display has no screen.
+   */
+  static double display_potential_edr(CGDirectDisplayID display_id) {
+    for (NSScreen *screen in [NSScreen screens]) {
+      const NSNumber *screen_number = screen.deviceDescription[@"NSScreenNumber"];
+      if (screen_number.unsignedIntValue == display_id) {
+        return screen.maximumPotentialExtendedDynamicRangeColorComponentValue;
+      }
+    }
+
+    BOOST_LOG(warning) << "Display "sv << display_id << " has no AppKit screen; assuming it cannot display HDR"sv;
+    return 1.0;
+  }
+
+  /**
+   * @brief Report whether the running system version exposes ScreenCaptureKit's HDR capture.
+   *
+   * Split out from `platform_supports_hdr_capture()` so that the `@available` block does not have to
+   * wrap the CPU query.
+   *
+   * @return True on macOS 15 and newer.
+   */
+  static bool platform_supports_hdr_os() {
+    if (@available(macOS 15.0, *)) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * @brief Report whether this machine can deliver an HDR ScreenCaptureKit capture.
+   *
+   * `SCStreamConfiguration.captureDynamicRange` appeared in macOS 15, and ScreenCaptureKit only offers
+   * an HDR picture on Apple Silicon. Upstream PR 5817 checks the same two things, so a capture asked
+   * for HDR on an Intel Mac or an older system silently stays SDR unless the platform is checked too.
+   *
+   * @return True when ScreenCaptureKit can be asked for an HDR picture.
+   */
+  static bool platform_supports_hdr_capture() {
+    if (!platform_supports_hdr_os()) {
+      return false;
+    }
+
+    // Apple reports this sysctl as set on Apple Silicon even when the process runs under Rosetta,
+    // which is the case a plain __arm64__ test would get wrong.
+    int arm64 {};
+    size_t size = sizeof(arm64);
+    if (sysctlbyname("hw.optional.arm64", &arm64, &size, nullptr, 0) != 0) {
+      BOOST_LOG(warning) << "Could not read hw.optional.arm64; assuming this machine cannot capture HDR"sv;
+      return false;
+    }
+
+    return arm64 != 0;
+  }
+
   struct sc_display_t: public display_t {
     SCCapture *sc_capture {};  ///< ScreenCaptureKit capture object driving this display backend.
     CGDirectDisplayID display_id {};  ///< Output display being captured.
+
+    /**
+     * @brief True when the captured picture is an HDR one.
+     *
+     * Set once while the capture is configured, because the screen's capability and the configured
+     * dynamic range are both settled there. See `is_hdr()`.
+     */
+    bool hdr_capture {};
+
+    /**
+     * @brief The captured screen's potential EDR headroom when the capture was configured.
+     */
+    double maximum_potential_edr {1.0};
+
+    /**
+     * @brief Report whether the captured picture carries HDR.
+     *
+     * macOS has no HDR display mode to query, so this is the decision taken when the capture was
+     * configured: an HDR dynamic range was asked for, the machine can deliver one, the screen reports
+     * EDR headroom above unity, and the client negotiated a 10 bit dynamic range. The last condition
+     * is checked again by `colorspace_from_client_config()` before the stream is labelled HDR; it is
+     * checked here because the captured pixels themselves would be wrong otherwise.
+     *
+     * @return True when captured frames are PQ-encoded Rec.2100 samples.
+     */
+    bool is_hdr() override {
+      return hdr_capture;
+    }
+
+    /**
+     * @brief Fill in the HDR10 metadata for a captured macOS screen.
+     *
+     * macOS publishes no mastering display or content light level metadata for a screen, measured in
+     * section 10.2 of `docs/macos_hdr.md`, so the mastering block is written from the BT.2020
+     * specification and the luminances come from `macos_hdr::mastering_defaults()`. Those luminances
+     * are environment tunables on purpose: this host renders the picture with its SDR white at
+     * 100 cd/m2, measured in section 10.3 of `docs/macos_hdr.md`, and the mastering block is the only
+     * lever that can re-reference it without spending a GPU pass on tone mapping on the zero-copy path.
+     *
+     * @param metadata The metadata to fill in, in the units `video.cpp` writes into the encoder.
+     * @return True, because the synthesised values are always usable.
+     */
+    bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
+      const auto defaults = macos_hdr::mastering_defaults();
+
+      // Chromaticities travel as integers normalised to 50000, the peak luminance in nits and the
+      // black luminance in ten-thousandths of a nit, which is what `video.cpp` turns back into the
+      // rational values the encoder expects.
+      macos_hdr::scale_chromaticity(macos_hdr::kBt2020RedX, macos_hdr::kBt2020RedY, metadata.displayPrimaries[0].x, metadata.displayPrimaries[0].y);
+      macos_hdr::scale_chromaticity(macos_hdr::kBt2020GreenX, macos_hdr::kBt2020GreenY, metadata.displayPrimaries[1].x, metadata.displayPrimaries[1].y);
+      macos_hdr::scale_chromaticity(macos_hdr::kBt2020BlueX, macos_hdr::kBt2020BlueY, metadata.displayPrimaries[2].x, metadata.displayPrimaries[2].y);
+      macos_hdr::scale_chromaticity(macos_hdr::kWhitePointX, macos_hdr::kWhitePointY, metadata.whitePoint.x, metadata.whitePoint.y);
+
+      metadata.maxDisplayLuminance = (std::uint16_t) std::llround(defaults.max_luminance_nits);
+      metadata.minDisplayLuminance = (std::uint16_t) std::llround(defaults.min_luminance_nits * 10000.0);
+      metadata.maxContentLightLevel = defaults.max_cll_nits;
+      metadata.maxFrameAverageLightLevel = defaults.max_fall_nits;
+
+      BOOST_LOG(info) << "Synthesised HDR10 metadata for a macOS screen: peak "sv << defaults.max_luminance_nits << " nits, black "sv << defaults.min_luminance_nits << " nits, maxCLL "sv << defaults.max_cll_nits << " nits, maxFALL "sv << defaults.max_fall_nits << " nits"sv;
+      return true;
+    }
 
     /**
      * @brief Spacing between reports of skipped idle ScreenCaptureKit deliveries.
@@ -481,6 +609,32 @@ namespace platf {
         if (!disp->sc_capture) {
           BOOST_LOG(error) << "SCCapture setup failed, trying AVFoundation..."sv;
         } else {
+          // macOS never switches a display into HDR mode, so the dynamic range has to be requested
+          // from ScreenCaptureKit for every stream. The screen's capability and the machine's are
+          // settled here, once, because the capture cannot change underneath a running encoder and
+          // `is_hdr()` is what the encoder's colorspace decision reads.
+          const auto requested_range = macos_hdr::dynamic_range_from_view(config::video.vt.capture_dynamic_range_macos);
+          disp->maximum_potential_edr = display_potential_edr(selected_display_id);
+          const bool platform_supports_hdr = platform_supports_hdr_capture();
+          disp->hdr_capture = macos_hdr::hdr_capture_enabled(macos_hdr::hdr_capture_request_t {
+            .range = requested_range,
+            .maximum_potential_edr = disp->maximum_potential_edr,
+            .platform_supports_hdr = platform_supports_hdr,
+            .session_requests_10bit = config.dynamicRange > 0,
+          });
+
+          if (disp->hdr_capture) {
+            // Raw SCCaptureDynamicRange values: 1 is the picture tuned to the host panel, 2 is the
+            // canonical Rec.2100 one a remote client wants. The color space is not optional next to
+            // the dynamic range, see sc_capture.h.
+            disp->sc_capture.captureDynamicRange = requested_range == macos_hdr::capture_dynamic_range_e::hdr_canonical ? 2 : 1;
+            disp->sc_capture.hdrColorSpaceName = (NSString *) kCGColorSpaceITUR_2100_PQ;
+
+            BOOST_LOG(info) << "Capturing "sv << macos_hdr::to_string(requested_range) << " HDR from display "sv << selected_display_id << ", screen headroom "sv << disp->maximum_potential_edr << "x"sv;
+          } else if (requested_range != macos_hdr::capture_dynamic_range_e::sdr) {
+            BOOST_LOG(warning) << "capture_dynamic_range_macos = "sv << macos_hdr::to_string(requested_range) << " but capturing SDR: screen headroom "sv << disp->maximum_potential_edr << "x, this machine can capture HDR: "sv << (platform_supports_hdr ? "yes"sv : "no"sv) << ", the client negotiated 10 bit: "sv << (config.dynamicRange > 0 ? "yes"sv : "no"sv);
+          }
+
           disp->width = disp->sc_capture.frameWidth;
           disp->height = disp->sc_capture.frameHeight;
           disp->env_width = disp->width;

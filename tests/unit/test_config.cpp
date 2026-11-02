@@ -193,3 +193,54 @@ INSTANTIATE_TEST_SUITE_P(
     VideotoolboxDrainConfigParam {"vt_drain = 99\n"sv, 16}
   )
 );
+
+using MacosHdrCaptureConfigParam = std::pair<std::string_view, std::string_view>;  ///< Configuration text and the capture dynamic range it must produce.
+
+/**
+ * @brief Coverage for the `capture_dynamic_range_macos` option as it is read from sunshine.conf.
+ */
+struct MacosHdrCaptureConfigTest: testing::TestWithParam<MacosHdrCaptureConfigParam> {
+  /**
+   * @brief Restore the encoder configuration that was captured before the test body ran.
+   */
+  void TearDown() override {
+    config::video = original_video;
+    config::modified_config_settings = original_modified_config_settings;
+  }
+
+  config::video_t original_video {config::video};  ///< Encoder configuration restored after each parameterized test.
+  decltype(config::modified_config_settings) original_modified_config_settings {config::modified_config_settings};  ///< Change tracking restored after each test.
+};
+
+TEST_P(MacosHdrCaptureConfigTest, AppliesTheConfiguredDynamicRange) {
+  const auto &[setting, expected] = GetParam();
+  config::apply_config_for_test(setting);
+
+  EXPECT_EQ(expected, config::video.vt.capture_dynamic_range_macos);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  MacosHdrCaptureValues,
+  MacosHdrCaptureConfigTest,
+  testing::Values(
+    MacosHdrCaptureConfigParam {"capture_dynamic_range_macos = sdr\n"sv, "sdr"sv},
+    MacosHdrCaptureConfigParam {"capture_dynamic_range_macos = hdr_local\n"sv, "hdr_local"sv},
+    MacosHdrCaptureConfigParam {"capture_dynamic_range_macos = hdr_canonical\n"sv, "hdr_canonical"sv},
+    MacosHdrCaptureConfigParam {"capture_dynamic_range_macos = hdr\n"sv, "sdr"sv}
+  )
+);
+
+/**
+ * @brief An unrecognised value keeps the dynamic range already in effect rather than resetting it.
+ */
+TEST(MacosHdrCaptureConfig, KeepsTheDynamicRangeAlreadyInEffect) {
+  const config::video_t original_video = config::video;
+  const decltype(config::modified_config_settings) original_modified_config_settings = config::modified_config_settings;
+
+  config::apply_config_for_test("capture_dynamic_range_macos = hdr_canonical\n"sv);
+  config::apply_config_for_test("capture_dynamic_range_macos = hdr\n"sv);
+  EXPECT_EQ("hdr_canonical"sv, config::video.vt.capture_dynamic_range_macos);
+
+  config::video = original_video;
+  config::modified_config_settings = original_modified_config_settings;
+}

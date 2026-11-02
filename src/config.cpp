@@ -1716,6 +1716,11 @@ namespace config {
     int_f(vars, "vt_low_latency", video.vt.vt_low_latency, vt::rt_from_view);
     int_f(vars, "vt_drain", video.vt.vt_drain, vt::drain_from_view);
 
+    // The macOS capture switch stays a string because it selects a ScreenCaptureKit capability rather
+    // than an encoder setting. `sdr` is both the default and the fallback for an unrecognised value, so
+    // a host that never asks for HDR captures exactly what it captured before.
+    string_restricted_f(vars, "capture_dynamic_range_macos", video.vt.capture_dynamic_range_macos, {"sdr"sv, "hdr_local"sv, "hdr_canonical"sv});
+
     std::string vaapi_quality;
     string_f(vars, "vaapi_quality", vaapi_quality);
     if (!vaapi_quality.empty()) {

@@ -236,6 +236,7 @@ API_AVAILABLE(macos(12.3))
         int captureFrameRate;
         OSType capturePixelFormat;
         BOOL captureShowsCursor;
+        NSInteger captureDynamicRange;
 
         os_unfair_lock_lock(&_stateLock);
         captureWidth = _frameWidth;
@@ -243,6 +244,7 @@ API_AVAILABLE(macos(12.3))
         captureFrameRate = _frameRate;
         capturePixelFormat = _pixelFormat;
         captureShowsCursor = _showsCursor;
+        captureDynamicRange = _captureDynamicRange;
         os_unfair_lock_unlock(&_stateLock);
 
         config.width = captureWidth;
@@ -254,6 +256,24 @@ API_AVAILABLE(macos(12.3))
         // referenced, so the encoder would read recycled pixels.
         config.queueDepth = 16;
         config.showsCursor = captureShowsCursor;
+
+        // An HDR picture needs the dynamic range and an explicit Rec.2100 color space together. Asking
+        // for the dynamic range alone leaves ScreenCaptureKit tagging frames with the display's SDR ICC
+        // profile, which is a silent failure measured in section 10.2 of docs/macos_hdr.md: the stream
+        // would carry SDR pixels under HDR labels. Only Apple Silicon on macOS 15 or newer can deliver
+        // an HDR capture at all, which the caller has already checked.
+        if (captureDynamicRange != 0) {
+            if (@available(macOS 15.0, *)) {
+                config.captureDynamicRange = (SCCaptureDynamicRange) captureDynamicRange;
+                if (self.hdrColorSpaceName.length > 0) {
+                    config.colorSpaceName = self.hdrColorSpaceName;
+                }
+                NSLog(@"[SCCapture] HDR capture requested: dynamicRange=%ld colorSpace=%s", (long) captureDynamicRange,
+                      self.hdrColorSpaceName.UTF8String ?: "<unset>");
+            } else {
+                NSLog(@"[SCCapture] HDR capture requested, but ScreenCaptureKit needs macOS 15 or newer; capturing SDR");
+            }
+        }
 
         // Enable audio capture - this is the key feature!
         if (self.captureAudio) {

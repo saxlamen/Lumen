@@ -3257,6 +3257,45 @@ supported on the current platform.
     </tr>
 </table>
 
+### capture_dynamic_range_macos
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Choose the dynamic range the screen capture asks ScreenCaptureKit for. macOS has no API
+            that switches a display into HDR mode, so what the capture layer hands the encoder is what
+            a client receives. Accepts sdr to capture what this platform has always captured,
+            hdr_canonical to capture the Rec.2100 PQ reference picture, or hdr_local to capture the
+            picture tuned to the host panel. A remote client normally wants hdr_canonical. A stream is
+            only encoded as HDR when the client also selected a 10 bit dynamic range, and the machine
+            has to be able to deliver an HDR capture: Apple Silicon running macOS 15 or newer, and a
+            display whose extended dynamic range headroom is above 1.0. Displays that report exactly
+            1.0 cannot show HDR at all, which includes most external monitors until HDR support for
+            the display is turned on.
+            @note{This option only applies when using macOS. When a requirement is missing the host
+            logs why and captures standard dynamic range instead, so a mistyped value behaves like sdr.}
+            @note{See docs/macos_hdr.md for the measurements behind these requirements. They include
+            the host rendering its standard dynamic range white at about 100 cd/m2, and the fact that
+            macOS publishes no mastering display metadata for a screen, so the HDR10 metadata written
+            for a captured stream is synthesised from the BT.2020 specification.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            sdr
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            capture_dynamic_range_macos = hdr_canonical
+            capture_dynamic_range_macos = hdr_local
+            @endcode</td>
+    </tr>
+</table>
+
 ## VA-API Encoder
 
 ### vaapi_blbrc
