@@ -28,7 +28,7 @@ needs a GUI login session: an event tap created from a plain SSH session receive
 Terminal must be listed in System Settings → Privacy & Security → Input Monitoring (Accessibility
 as well, for the session-level tap).
 
-Recordings land in `var/scroll-data/` in this repository (ignored by git; `~/Desktop/scroll-data` is a symlink to it), newest first, and analysis defaults to that glob.
+Recordings land in `var/scroll-data/` in this repository (ignored by git), newest first, and analysis defaults to that glob.
 The recorder compiles a small Swift helper into `~/Library/Caches/lumen-scroll` on first run;
 `CGEventCreateMouseEvent` is not exported from the Swift SDK bundle, which is why it shells out
 to `osascript` for the mouse position instead of binding it.

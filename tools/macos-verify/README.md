@@ -49,5 +49,6 @@ server, and clicks there fail in ways that look like the app being broken.
 ## Where things live
 
 Recordings and scratch output go to `var/scroll-data` in this repository, which is ignored by
-git. `~/Desktop/scroll-data` is a symlink to it so the older habits and the desktop shortcuts
-keep working.
+git. The desktop holds nothing but launchers: `~/Desktop/Lumen/*.command` are small scripts that
+exec the versioned copies in this repository, so there is one copy of each tool and no symlinks
+to break when the tree moves.

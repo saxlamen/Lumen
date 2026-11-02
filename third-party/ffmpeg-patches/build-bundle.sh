@@ -19,7 +19,7 @@ set -euo pipefail
 BUILD_DEPS_TAG="${BUILD_DEPS_TAG:-v2026.910.121303}"
 FFMPEG_COMMIT="${FFMPEG_COMMIT:-bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa}"
 ARCHIVE="${ARCHIVE:-Darwin-arm64-ffmpeg.tar.gz}"
-WORK="${WORK:-/tmp/lumen-ffmpeg-bundle}"
+WORK="${WORK:-$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -1382,7 +1382,7 @@ window 從 40 到 131 ms 都出現過，既不是固定帧數也不是固定時�
   - 無任何行為/效能修正（無 capture race 修復、無 queueDepth=16、無 V2/N2/N3/A2/A3/V3/I3）。
 - 裝機位置 `/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen`，UUID `77E362DB-0FFF-30AB-B923-1B418F9AE5DE`（前一版 baseline+量測 UUID `494A9C92` 已被取代，因為它帶的是舊的雙重計窗 encode rate）。
 - 新版（main）binary 备份在 `/tmp/lumen_main_284f09f3.bin`，UUID `9BEDDE55`，量測完原路還原。
-- 桌面腳本 `~/Desktop/lumen-motion-test.command`：全螢幕 60 Hz 真內容動畫（Swift/Cocoa，每顆螢幕一個 borderless 視窗，`Timer` 1/60 s 重繪），跑 75 秒自動離開；目的就是在「內容真的每帧都在變」的條件下重讀三個數，同時验證上面 V8 的預測。
+- 桌面腳本 `~/Desktop/Lumen/lumen-motion-test.command`：全螢幕 60 Hz 真內容動畫（Swift/Cocoa，每顆螢幕一個 borderless 視窗，`Timer` 1/60 s 重繪），跑 75 秒自動離開；目的就是在「內容真的每帧都在變」的條件下重讀三個數，同時验證上面 V8 的預測。
 
 ### 3. 請你 [Round 36] 只做一件事
 收割完脚本場後，把 `min_log_level` 還原 `info`（我已在 `~/.config/sunshine/sunshine.conf.bak-p0` 留有原始備份，diff 過等價）、還原 main binary、結案。若脚本場 encode rate 落在 55–60，我打算在 `docs/macos_latency_audit.md` 的 V8 段落寫成：「最低帧率路徑是空閒看門狗，動態內容下節拍由 SCK 決定；`encode rate` 低於 60 只反映內容幀数，不是编码器瓶頸」，並在 A/B 段落把「inconclusive」改成「乾淨對照、維持 enabled」。你认不认這個寫法。
@@ -1399,7 +1399,7 @@ window 從 40 到 131 ms 都出現過，既不是固定帧數也不是固定時�
 
 2. **結案收尾動作（`min_log_level = info` + 還原 `main` binary）**：**AGREE，但附一個重要提醒**
    - ⚠️ **請注意 `/tmp/lumen_main_284f09f3.bin`（UUID `9BEDDE55`，11:31 建立）是在你 `12:07` 提交 `bcd869c9`（修復 `encode_rate_meter` 雙重視窗延遲與跨 session 污染）之前備份的**，而 `cmake-build-macos/lumen`（12:09 建立，UUID `77E362DB`）目前是 `baseline-bench` 的 binary！
-   - 因此等 75 秒腳本場收割完畢後，**請不要直接拿 `11:31` 的 `/tmp/lumen_main_284f09f3.bin` 覆蓋回去**（那樣裝機版會少掉 `bcd869c9`），而是在 `main` 分支重新 `ninja -C cmake-build-macos lumen` 編出含 `bcd869c9` 的最新 `main` binary，再安裝到 `/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen` 並補簽 `com.saxlamen.lumen`、還原 `min_log_level = info` 重啟服務、順手清理 `~/Desktop/lumen-motion-test.command` 與 `/tmp/lumen_main_284f09f3.bin`。
+   - 因此等 75 秒腳本場收割完畢後，**請不要直接拿 `11:31` 的 `/tmp/lumen_main_284f09f3.bin` 覆蓋回去**（那樣裝機版會少掉 `bcd869c9`），而是在 `main` 分支重新 `ninja -C cmake-build-macos lumen` 編出含 `bcd869c9` 的最新 `main` binary，再安裝到 `/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen` 並補簽 `com.saxlamen.lumen`、還原 `min_log_level = info` 重啟服務、順手清理 `~/Desktop/Lumen/lumen-motion-test.command` 與 `/tmp/lumen_main_284f09f3.bin`。
 
 等用戶跑完這 75 秒桌面腳本收割數據即可正式結案！
 
@@ -1515,7 +1515,7 @@ baseline 這場的條件（真 60 Hz 內容 + 修好的計量）跟今天 A/B �
 請執行最後四步收尾：
 1. **裝機版保留 `341546C0`**（`main` HEAD 含 `bcd869c9` + 正確 `SUNSHINE_ASSETS_DIR` 絕對路徑，已簽名 `com.saxlamen.lumen`）。
 2. **`~/.config/sunshine/sunshine.conf` 還原為 `min_log_level = info`**（移除 debug 行）並重啟 `sh.brew.lumen`。
-3. **清理臨時檔案與分支**：移除 `~/Desktop/lumen-motion-test.command`、`/tmp/lumen_main_284f09f3.bin`、本地臨時測試 log 與 `baseline-bench` 分支。
+3. **清理臨時檔案與分支**：移除 `~/Desktop/Lumen/lumen-motion-test.command`、`/tmp/lumen_main_284f09f3.bin`、本地臨時測試 log 與 `baseline-bench` 分支。
 4. **提交並推送最終文件 commit**：將 `docs/macos_latency_audit.md` 與 `docs/macos_latency_audit_thread.md`（至 Round 40/41）commit 並 push 到 `origin/main`。
 
 宣告 **`PI_ALL_CLOSED_FINAL`**！40 輪合作非常精彩，辛苦了！
@@ -1806,7 +1806,7 @@ Verdict：**PI_PROBE_FIRST**（`--ffmpeg-pop` + `--spike` + log 單調性檢查 
 - **棘輪与版本无关**：8.0 / 8.1 / 9.0 / master 四份 `videotoolboxenc.c` 都有 `FF_CODEC_ENCODE_CB(vtenc_frame)` + `get_frame = dts_delta >= 0` + `vtenc_q_pop(vtctx, !frame, ...)`。8.x 的 GET_SYM 清单里也没有 `MaxFrameDelayCount`。
 - build-deps 的 patch 只有 `cbs/01-explicit-intmath`、`cbs/02-remove-register`、`libavutil/01-add-bgra1010102`、SVT-AV1 —— **没有一条碰 videotoolboxenc.c**。所以 lag-1 会是该 recipe 的第一条 VT patch，而且形态适合直接提 upstream（Trac 0 hits 那个缺口）。
 
-### 2. patch 本体（存档在 `~/vt-poc/patches/01-vt-lag1-drain.patch`，20 行）
+### 2. patch 本体（存档在 `~/Scripts/Lumen/deps/vt-poc/patches/01-vt-lag1-drain.patch`，20 行）
 `vtenc_frame()` 里 `vtctx->frame_ct_in++` 之前：
 ```c
 if ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) && vtctx->frame_ct_in > 0) {
@@ -1822,8 +1822,8 @@ if ((avctx->flags & AV_CODEC_FLAG_LOW_DELAY) && vtctx->frame_ct_in > 0) {
 `- 1` 是一个 FFmpeg pts tick（Sunshine 的 `frame->pts = frame_nr`，`src/video.cpp:1846`），换成 CMTime 就是「上一帧」——探針的 `--drain-lag 1` 语义。只在 LOW_DELAY 下生效，其它调用者行为不变。
 
 ### 3. 建置与部署状态（可重跑）
-- FFmpeg：`~/vt-poc/ffmpeg` @ `release/8.1`，configure 照抄部署版（我从 `.a` 里读出的原始命令行）减掉外部库：`--disable-all --disable-autodetect --disable-iconv --enable-gpl --enable-static --enable-avcodec --enable-avutil --enable-bsfs --enable-swscale --enable-encoder='mpeg2video,h263p' --enable-videotoolbox --enable-encoder='h264_videotoolbox,hevc_videotoolbox' --arch=arm64 --enable-cross-compile --target-os=darwin`，45 秒编完。bundle 补了 `libcbs.a`（从 `libavcodec/cbs*.o` ar 出来）和内部头（含 `hevc/hevc.h` 这类子目录头，必须整个 mirror）。
-- Lumen：`cmake-build-vtpoc`，`-DFFMPEG_PREPARED_BINARIES=$HOME/vt-poc/bundle -DBUILD_DOCS=OFF`（Doxygen 没装，主建置用的是 `BUILD_DOCS=OFF`）。产物 `cmake-build-vtpoc/lumen` 里能 `strings` 到 `Draining the previous frame returned` ⇒ patch 确实静态链进去了。
+- FFmpeg：`~/Scripts/Lumen/deps/vt-poc/ffmpeg` @ `release/8.1`，configure 照抄部署版（我从 `.a` 里读出的原始命令行）减掉外部库：`--disable-all --disable-autodetect --disable-iconv --enable-gpl --enable-static --enable-avcodec --enable-avutil --enable-bsfs --enable-swscale --enable-encoder='mpeg2video,h263p' --enable-videotoolbox --enable-encoder='h264_videotoolbox,hevc_videotoolbox' --arch=arm64 --enable-cross-compile --target-os=darwin`，45 秒编完。bundle 补了 `libcbs.a`（从 `libavcodec/cbs*.o` ar 出来）和内部头（含 `hevc/hevc.h` 这类子目录头，必须整个 mirror）。
+- Lumen：`cmake-build-vtpoc`，`-DFFMPEG_PREPARED_BINARIES=$HOME/Scripts/Lumen/deps/vt-poc/bundle -DBUILD_DOCS=OFF`（Doxygen 没装，主建置用的是 `BUILD_DOCS=OFF`）。产物 `cmake-build-vtpoc/lumen` 里能 `strings` 到 `Draining the previous frame returned` ⇒ patch 确实静态链进去了。
 - 部署：`/opt/homebrew/Cellar/lumen/1.0.0/bin/lumen`，**UUID `534EF548-0508-3F9B-A793-1B79ED0AF1B4`**，已 `com.saxlamen.lumen` 重签；旧的主干 binary 备份在 `/tmp/lumen_main_pre-poc.bin`。conf 已回 GPU 默认（拿掉 `video_bitrate`、`encoder`），只为量测临时开 `min_log_level = debug`。
 - **已知代价**：这个 POC build 没有 x264/x265/SVT-AV1（软件编码路径不可用）。跟用户拍板的 GPU 方向一致，但要比软件 arm 时得换回主干 binary。
 
@@ -1916,7 +1916,7 @@ patch 现在是无条件 `LOW_DELAY` 生效。建議加一條 FFmpeg avoption `f
 - 小記：`strings` 在 `.o` 裡搜不到 `vt_drain`（字面值合併的假象，`vt_low_latency` 却在），所以**別再靠字串搜證證明接線**，參數化 conf 測試才是證據。
 
 ### 2. 對你 Round 50 三問的執行結果與兩點偏差
-- **Q3（upstream）**：**用戶直接拍板不提 upstream**，只走我們自己的 FFmpeg build。连带效果：avoption 預設可以是 **1**（不必遷就 upstream「預設不改變行為」的審查要求）。build-deps 那軌仍要做：patch 檔案在 `~/vt-poc/patches/02-vt-frame-drain-option.patch`，目標位置 `third-party/build-deps/patches/FFmpeg/FFmpeg/`（submodule，屬打包/CI 工作，用戶表態自己處理）。
+- **Q3（upstream）**：**用戶直接拍板不提 upstream**，只走我們自己的 FFmpeg build。连带效果：avoption 預設可以是 **1**（不必遷就 upstream「預設不改變行為」的審查要求）。build-deps 那軌仍要做：patch 檔案在 `~/Scripts/Lumen/deps/vt-poc/patches/02-vt-frame-drain-option.patch`，目標位置 `third-party/build-deps/patches/FFmpeg/FFmpeg/`（submodule，屬打包/CI 工作，用戶表態自己處理）。
 - **Q2（開關形態）**：做了，但語意從 0/1 擴成 **0..N**。理由見下面第 3 節的實測：drain 頻率不是開/關，而是一根連續的延遲↔吞吐旋鈕，4K 數據把它量出來了。
 - **Q1（4K 場）**：**用戶已同意跑**，我剛把裝機切成最终形态（見第 4 節）等他那一場。
 
