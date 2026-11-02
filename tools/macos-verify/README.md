@@ -13,7 +13,7 @@ server, and clicks there fail in ways that look like the app being broken.
 | --- | --- |
 | `verify-release.sh` | "Is this DMG safe to ship?" Signature, notarization, staple, hardened runtime, entitlements, Finder layout, the patched FFmpeg (`frame_drain`), and the presence of each macOS fix in the shipped binary. |
 | `verify-installed.sh` | "Is what is in `/Applications` the artifact I built?" Compares its CDHash against the one inside the DMG, then reports version, permissions, ports, menu bar item and any startup errors. |
-| `restore-release.sh` | "Put the real build back." After testing a development build in `/Applications`, copies the notarized one back from the DMG and proves it. |
+| `restore-release.sh` | "Put the real build back." After testing a development build in `/Applications`, copies the notarized one back from the DMG, proves its CDHash matches, and staples the ticket onto the installed copy so it verifies without a network. |
 | `quit-reopen-test.sh` | "Does the app obey the quit request macOS sends before relaunching it?" Sends the same Apple event the "Quit & Reopen" button sends, and reports whether the process actually exits. |
 | `tray-autostart-test.sh` | "Does the start-at-login switch move both the menu label and the real login item?" Clicks it twice and checks the system's login items in between. Leaves a development build installed - run `restore-release.sh` afterwards. |
 | `toggle-accessibility.applescript` | Flips the Accessibility switch for Sunshine in System Settings and prints the dialog the system shows, for walking the permission flow without hands. |
@@ -44,7 +44,13 @@ server, and clicks there fail in ways that look like the app being broken.
 - Reinstalling the app does not reset permissions while the signing identity stays the same,
   but re-signing with a different identity does.
 - `stapler validate` on the app inside a mounted DMG always reports no ticket: the ticket is
-  stapled to the DMG, and the mount is read-only.
+  stapled to the DMG, and the mount is read-only. The installed copy can be stapled afterwards -
+  the ticket is looked up by CDHash, so nothing has to be resubmitted - and `restore-release.sh`
+  now does that. Stapling during packaging instead is not a one-line change: CPack signs the app
+  inside its own install step, and a staple has to be the last operation on the bundle or it
+  invalidates the seal, so the image would have to be unpacked, the app stapled, and the image
+  rebuilt with `src_assets/macos/build/dmg-finder-layout.applescript`, which this repository
+  already carries.
 
 ## Where things live
 
