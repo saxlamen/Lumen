@@ -25,6 +25,11 @@ pkill -9 -f "[S]unshine.app/Contents/MacOS" 2>/dev/null; sleep 1
 rm -rf "$APP"
 cp -R "$SRC" "$APP"
 hdiutil detach "$MP" >/dev/null 2>&1
+# The notarization ticket is stapled to the DMG, not to the app inside it, so the copy that lands in
+# /Applications needs an online check on a machine with no network until somebody staples it. This
+# costs one network round trip and makes the installed app verifiable offline.
+echo "  釘書（安裝副本）: $(xcrun stapler staple "$APP" 2>&1 | tail -1)"
+echo "  釘書複驗: $(xcrun stapler validate "$APP" 2>&1 | tail -1)"
 echo "  簽章: $(codesign --verify --strict "$APP" 2>&1 | tail -1)"
 echo "  Gatekeeper: $(spctl -a -vv "$APP" 2>&1 | tail -1)"
 echo "  CDHash: $(codesign -dvvv "$APP" 2>&1 | grep '^CDHash' | cut -d= -f2)"
