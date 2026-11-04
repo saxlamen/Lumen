@@ -140,6 +140,34 @@ namespace config {
        * makes a stream HDR; see section 11 of `docs/macos_hdr.md`.
        */
       std::string capture_dynamic_range_macos {"sdr"};
+
+      /**
+       * @brief The HDR10 mastering peak luminance to declare for a macOS screen, in cd/m2.
+       *
+       * -1 derives it from the captured screen: 100 cd/m2 of SDR white times its EDR headroom, which is
+       * the brightest picture this host can actually render. Declaring more than that is over-declaring,
+       * and a client that normalises the picture by the declared peak renders the whole frame darker,
+       * measured in section 12 of `docs/macos_hdr.md`.
+       */
+      double hdr_max_luminance_macos {-1.0};
+
+      /**
+       * @brief The HDR10 mastering black luminance to declare, in cd/m2; -1 uses 0.005 cd/m2.
+       */
+      double hdr_min_luminance_macos {-1.0};
+
+      /**
+       * @brief The content light level to declare, in cd/m2.
+       *
+       * -1 follows the resolved maximum luminance, 0 leaves the content light level side data out of the
+       * stream, and anything larger than the declared peak is clamped down to it.
+       */
+      double hdr_max_cll_macos {-1.0};
+
+      /**
+       * @brief The frame average light level to declare, in cd/m2; -1 and 0 both leave it out.
+       */
+      double hdr_max_fall_macos {-1.0};
     } vt;  ///< VideoToolbox encoder options.
 
     struct {

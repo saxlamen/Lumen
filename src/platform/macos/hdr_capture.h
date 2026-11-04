@@ -87,6 +87,24 @@ namespace platf::macos_hdr {
   inline constexpr double kHdrCapabilityThreshold = 1.0;
 
   /**
+   * @brief The SDR white level a macOS screen renders, in cd/m2.
+   *
+   * Section 10.3 of `docs/macos_hdr.md` measures 99.9 cd/m2 for a screen with 1.0 of EDR headroom, which
+   * is the 100 cd/m2 this platform is built around. It is the base of the derived mastering peak.
+   */
+  inline constexpr double kSdrWhiteNits = 100.0;
+
+  /**
+   * @brief The black level declared when nothing else names one, in cd/m2.
+   */
+  inline constexpr double kDefaultMasterBlackNits = 0.005;
+
+  /**
+   * @brief The configured value that means "not set, derive it".
+   */
+  inline constexpr double kUnsetMasteringValue = -1.0;
+
+  /**
    * @brief The luminance tunables used when there is no real mastering metadata to read.
    */
   struct mastering_defaults_t {
@@ -223,6 +241,19 @@ namespace platf::macos_hdr {
   }
 
   /**
+   * @brief The configured overrides for the synthesised HDR10 luminances.
+   *
+   * These are the four `hdr_*_macos` configuration values read verbatim, so every field carries the
+   * `kUnsetMasteringValue` sentinel when the operator did not name it.
+   */
+  struct mastering_config_t {
+    double max_luminance_nits;  ///< `hdr_max_luminance_macos`; unset derives it from the screen's headroom.
+    double min_luminance_nits;  ///< `hdr_min_luminance_macos`; unset uses `kDefaultMasterBlackNits`.
+    double max_cll_nits;  ///< `hdr_max_cll_macos`; unset follows the peak, 0 leaves the side data out.
+    double max_fall_nits;  ///< `hdr_max_fall_macos`; unset and 0 both leave it out.
+  };
+
+  /**
    * @brief Read a positive number from the environment, falling back when it is absent or malformed.
    *
    * @param name Environment variable to read.
@@ -247,20 +278,60 @@ namespace platf::macos_hdr {
   /**
    * @brief The HDR10 numbers to synthesise for a macOS screen.
    *
-   * All four are environment tunables because the client-side response to them is what is still being
-   * settled: the host renders a picture whose SDR white sits at 100 cd/m2, measured in section 10.3 of
-   * `docs/macos_hdr.md`, and the mastering block is the only lever that can lift it without spending a
-   * GPU pass on the host.
+   * All four are resolved from three sources, most specific first: the `LUMEN_HDR_*` environment
+   * variables, then the `hdr_*_macos` configuration values, then a value derived from the captured
+   * screen. The environment keeps the first word because it is the knob used while measuring a client,
+   * where editing sunshine.conf and relaunching costs a session.
    *
-   * @return `LUMEN_HDR_MAX_LUMINANCE`, `LUMEN_HDR_MIN_LUMINANCE`, `LUMEN_HDR_MAX_CLL` and
-   *         `LUMEN_HDR_MAX_FALL` when set, otherwise 1000 cd/m2, 0.005 cd/m2, 1000 cd/m2 and 0.
+   * The derived peak is `kSdrWhiteNits` times the screen's EDR headroom, which is the brightest picture
+   * the host can render: section 10.4 of `docs/macos_hdr.md` measures the capture passing that range
+   * through unchanged, and section 12 measures that a client which normalises the picture by the declared
+   * peak makes the whole frame darker, SDR desktop included, when the peak is declared above what the
+   * content reaches. Deriving it from the screen is what keeps that from being a constant copied from a
+   * panel on another platform, and it can never over-declare.
+   *
+   * A content light level larger than the declared peak is content that cannot exist, so it is clamped to
+   * the peak. 0 keeps its existing meaning of leaving that side data out of the stream.
+   *
+   * @param maximum_potential_edr The captured screen's potential EDR headroom. A screen that cannot do
+   *        HDR reports 1.0 and a value that is not a number is treated the same way, so the derived peak
+   *        is then the SDR white itself.
+   * @param config The configured overrides, with `kUnsetMasteringValue` where nothing was set.
+   * @return The luminances to declare, in cd/m2.
    */
-  inline mastering_defaults_t mastering_defaults() {
+  inline mastering_defaults_t mastering_defaults(double maximum_potential_edr, const mastering_config_t &config) {
+    const double headroom = display_can_hdr(maximum_potential_edr) ? maximum_potential_edr : 1.0;
+
+    // A whole number of nits, because this is written into a uint16_t field downstream and a fraction
+    // here would only make the log line harder to read.
+    const double derived_max_luminance = std::llround(kSdrWhiteNits * headroom);
+
+    const double max_luminance = env_number("LUMEN_HDR_MAX_LUMINANCE", config.max_luminance_nits >= 0.0 ? config.max_luminance_nits : derived_max_luminance);
+    const double min_luminance = env_number("LUMEN_HDR_MIN_LUMINANCE", config.min_luminance_nits >= 0.0 ? config.min_luminance_nits : kDefaultMasterBlackNits);
+
+    // Unset content statistics follow the peak or stay out of the stream; an explicit 0 stays 0, which
+    // is how the side data is suppressed for a client that handles the metadata badly.
+    const double configured_cll = config.max_cll_nits >= 0.0 ? config.max_cll_nits : max_luminance;
+    const double configured_fall = config.max_fall_nits >= 0.0 ? config.max_fall_nits : 0.0;
+
+    const double max_cll = env_number("LUMEN_HDR_MAX_CLL", configured_cll);
+    const double max_fall = env_number("LUMEN_HDR_MAX_FALL", configured_fall);
+
+    auto to_level = [max_luminance](double value) {
+      if (value > max_luminance) {
+        value = max_luminance;
+      }
+      if (value > UINT16_MAX) {
+        value = UINT16_MAX;
+      }
+      return (std::uint16_t) std::llround(value);
+    };
+
     return mastering_defaults_t {
-      .max_luminance_nits = env_number("LUMEN_HDR_MAX_LUMINANCE", 1000.0),
-      .min_luminance_nits = env_number("LUMEN_HDR_MIN_LUMINANCE", 0.005),
-      .max_cll_nits = (std::uint16_t) env_number("LUMEN_HDR_MAX_CLL", 1000.0),
-      .max_fall_nits = (std::uint16_t) env_number("LUMEN_HDR_MAX_FALL", 0.0),
+      .max_luminance_nits = max_luminance,
+      .min_luminance_nits = min_luminance,
+      .max_cll_nits = to_level(max_cll),
+      .max_fall_nits = to_level(max_fall),
     };
   }
 

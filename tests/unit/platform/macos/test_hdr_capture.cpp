@@ -183,15 +183,103 @@ TEST(MacosHdrCapture, ClampsChromaticitiesThatDoNotFit) {
 }
 
 /**
- * @brief Without any tunable the synthesiser writes the HDR10 reference numbers.
+ * @brief The four luminance options as sunshine.conf leaves them when none is named.
+ *
+ * @return A configuration carrying `kUnsetMasteringValue` in every field.
  */
-TEST_F(MacosHdrDefaultsTest, UsesHdr10ReferenceNumbersByDefault) {
-  const mastering_defaults_t defaults = platf::macos_hdr::mastering_defaults();
+platf::macos_hdr::mastering_config_t unset_mastering_config() {
+  return platf::macos_hdr::mastering_config_t {
+    .max_luminance_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .min_luminance_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .max_cll_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .max_fall_nits = platf::macos_hdr::kUnsetMasteringValue,
+  };
+}
 
-  EXPECT_DOUBLE_EQ(1000.0, defaults.max_luminance_nits);
-  EXPECT_DOUBLE_EQ(0.005, defaults.min_luminance_nits);
-  EXPECT_EQ(1000, defaults.max_cll_nits);
-  EXPECT_EQ(0, defaults.max_fall_nits);
+/**
+ * @brief With nothing named, the peak is this screen's brightest picture.
+ *
+ * The derivation is 100 cd/m2 of SDR white times the screen's EDR headroom, which is what sections 10.3
+ * and 10.4 of `docs/macos_hdr.md` measure the host producing, and it can never be over-declared.
+ */
+TEST_F(MacosHdrDefaultsTest, DerivesThePeakFromTheScreensHeadroom) {
+  const mastering_defaults_t hdr = platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config());
+
+  EXPECT_DOUBLE_EQ(500.0, hdr.max_luminance_nits);
+  EXPECT_DOUBLE_EQ(0.005, hdr.min_luminance_nits);
+
+  // Content statistics that were not named follow the peak, or stay out of the stream.
+  EXPECT_EQ(500, hdr.max_cll_nits);
+  EXPECT_EQ(0, hdr.max_fall_nits);
+
+  // A screen that cannot do HDR has no headroom to derive from, so its own white is the peak.
+  EXPECT_DOUBLE_EQ(100.0, platf::macos_hdr::mastering_defaults(1.0, unset_mastering_config()).max_luminance_nits);
+  EXPECT_DOUBLE_EQ(2000.0, platf::macos_hdr::mastering_defaults(20.0, unset_mastering_config()).max_luminance_nits);
+
+  // A headroom that is not a number is a screen nobody measured, not an infinite one.
+  EXPECT_DOUBLE_EQ(100.0, platf::macos_hdr::mastering_defaults(std::numeric_limits<double>::quiet_NaN(), unset_mastering_config()).max_luminance_nits);
+}
+
+/**
+ * @brief A configured luminance is used instead of the derived one.
+ */
+TEST_F(MacosHdrDefaultsTest, ReadsTheConfiguredLuminances) {
+  const auto config = platf::macos_hdr::mastering_config_t {
+    .max_luminance_nits = 300.0,
+    .min_luminance_nits = 0.01,
+    .max_cll_nits = 240.0,
+    .max_fall_nits = 120.0,
+  };
+
+  const mastering_defaults_t defaults = platf::macos_hdr::mastering_defaults(5.0, config);
+
+  EXPECT_DOUBLE_EQ(300.0, defaults.max_luminance_nits);
+  EXPECT_DOUBLE_EQ(0.01, defaults.min_luminance_nits);
+  EXPECT_EQ(240, defaults.max_cll_nits);
+  EXPECT_EQ(120, defaults.max_fall_nits);
+}
+
+/**
+ * @brief The environment wins over the configuration, which is the knob used while measuring a client.
+ */
+TEST_F(MacosHdrDefaultsTest, EnvironmentOverridesTheConfiguration) {
+  setenv("LUMEN_HDR_MAX_LUMINANCE", "1500", 1);
+
+  const auto config = platf::macos_hdr::mastering_config_t {
+    .max_luminance_nits = 300.0,
+    .min_luminance_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .max_cll_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .max_fall_nits = platf::macos_hdr::kUnsetMasteringValue,
+  };
+
+  const mastering_defaults_t defaults = platf::macos_hdr::mastering_defaults(5.0, config);
+
+  EXPECT_DOUBLE_EQ(1500.0, defaults.max_luminance_nits);
+
+  // The statistics nobody named follow the peak that actually won.
+  EXPECT_EQ(1500, defaults.max_cll_nits);
+}
+
+/**
+ * @brief A content light level above the declared peak is clamped, not trusted.
+ */
+TEST_F(MacosHdrDefaultsTest, ClampsContentLightLevelsToThePeak) {
+  const auto over = platf::macos_hdr::mastering_config_t {
+    .max_luminance_nits = 300.0,
+    .min_luminance_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .max_cll_nits = 1000.0,
+    .max_fall_nits = 4000.0,
+  };
+
+  const mastering_defaults_t configured = platf::macos_hdr::mastering_defaults(5.0, over);
+  EXPECT_EQ(300, configured.max_cll_nits);
+  EXPECT_EQ(300, configured.max_fall_nits);
+
+  setenv("LUMEN_HDR_MAX_CLL", "9000", 1);
+  setenv("LUMEN_HDR_MAX_FALL", "9000", 1);
+  const mastering_defaults_t from_environment = platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config());
+  EXPECT_EQ(500, from_environment.max_cll_nits);
+  EXPECT_EQ(500, from_environment.max_fall_nits);
 }
 
 /**
@@ -203,7 +291,7 @@ TEST_F(MacosHdrDefaultsTest, ReadsTheEnvironmentTunables) {
   setenv("LUMEN_HDR_MAX_CLL", "400", 1);
   setenv("LUMEN_HDR_MAX_FALL", "200", 1);
 
-  const mastering_defaults_t defaults = platf::macos_hdr::mastering_defaults();
+  const mastering_defaults_t defaults = platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config());
 
   EXPECT_DOUBLE_EQ(4000.0, defaults.max_luminance_nits);
   EXPECT_DOUBLE_EQ(0.01, defaults.min_luminance_nits);
@@ -215,14 +303,14 @@ TEST_F(MacosHdrDefaultsTest, ReadsTheEnvironmentTunables) {
  * @brief A tunable that is not a plain non-negative number is ignored rather than trusted.
  */
 TEST_F(MacosHdrDefaultsTest, IgnoresMalformedTunables) {
-  const mastering_defaults_t reference = platf::macos_hdr::mastering_defaults();
+  const mastering_defaults_t reference = platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config());
 
   for (const char *bad: {"", "abc", "12x", "1 2", "-5", "0x10"}) {
     setenv("LUMEN_HDR_MAX_LUMINANCE", bad, 1);
-    EXPECT_DOUBLE_EQ(reference.max_luminance_nits, platf::macos_hdr::mastering_defaults().max_luminance_nits) << "value was [" << bad << ']';
+    EXPECT_DOUBLE_EQ(reference.max_luminance_nits, platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config()).max_luminance_nits) << "value was [" << bad << ']';
 
     setenv("LUMEN_HDR_MIN_LUMINANCE", bad, 1);
-    EXPECT_DOUBLE_EQ(reference.min_luminance_nits, platf::macos_hdr::mastering_defaults().min_luminance_nits) << "value was [" << bad << ']';
+    EXPECT_DOUBLE_EQ(reference.min_luminance_nits, platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config()).min_luminance_nits) << "value was [" << bad << ']';
 
     unsetenv("LUMEN_HDR_MAX_LUMINANCE");
     unsetenv("LUMEN_HDR_MIN_LUMINANCE");
@@ -231,9 +319,27 @@ TEST_F(MacosHdrDefaultsTest, IgnoresMalformedTunables) {
   // Zero is a plain number, and it is what suppresses the content light level side data.
   setenv("LUMEN_HDR_MAX_CLL", "0", 1);
   setenv("LUMEN_HDR_MAX_FALL", "0", 1);
-  const mastering_defaults_t suppressed = platf::macos_hdr::mastering_defaults();
+  const mastering_defaults_t suppressed = platf::macos_hdr::mastering_defaults(5.0, unset_mastering_config());
   EXPECT_EQ(0, suppressed.max_cll_nits);
   EXPECT_EQ(0, suppressed.max_fall_nits);
+}
+
+/**
+ * @brief A configured 0 leaves the content light level side data out just like the tunable does.
+ */
+TEST_F(MacosHdrDefaultsTest, ConfiguredZeroStillSuppressesTheSideData) {
+  const auto config = platf::macos_hdr::mastering_config_t {
+    .max_luminance_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .min_luminance_nits = platf::macos_hdr::kUnsetMasteringValue,
+    .max_cll_nits = 0.0,
+    .max_fall_nits = 0.0,
+  };
+
+  const mastering_defaults_t defaults = platf::macos_hdr::mastering_defaults(5.0, config);
+
+  EXPECT_DOUBLE_EQ(500.0, defaults.max_luminance_nits);
+  EXPECT_EQ(0, defaults.max_cll_nits);
+  EXPECT_EQ(0, defaults.max_fall_nits);
 }
 
 #endif

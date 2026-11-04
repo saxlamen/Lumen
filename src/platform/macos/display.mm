@@ -356,16 +356,23 @@ namespace platf {
      *
      * macOS publishes no mastering display or content light level metadata for a screen, measured in
      * section 10.2 of `docs/macos_hdr.md`, so the mastering block is written from the BT.2020
-     * specification and the luminances come from `macos_hdr::mastering_defaults()`. Those luminances
-     * are environment tunables on purpose: this host renders the picture with its SDR white at
-     * 100 cd/m2, measured in section 10.3 of `docs/macos_hdr.md`, and the mastering block is the only
-     * lever that can re-reference it without spending a GPU pass on tone mapping on the zero-copy path.
+     * specification and the luminances come from `macos_hdr::mastering_defaults()`. Those luminances are
+     * configuration options with an environment override on purpose: this host renders the picture with
+     * its SDR white at 100 cd/m2, measured in section 10.3 of `docs/macos_hdr.md`, and the mastering
+     * block is the only lever that can re-reference it without spending a GPU pass on tone mapping on the
+     * zero-copy path. The default is derived from this screen's EDR headroom, so it needs no tuning on a
+     * host whose display is not the one it was measured on.
      *
      * @param metadata The metadata to fill in, in the units `video.cpp` writes into the encoder.
      * @return True, because the synthesised values are always usable.
      */
     bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
-      const auto defaults = macos_hdr::mastering_defaults();
+      const auto defaults = macos_hdr::mastering_defaults(maximum_potential_edr, macos_hdr::mastering_config_t {
+                                                                   .max_luminance_nits = config::video.vt.hdr_max_luminance_macos,
+                                                                   .min_luminance_nits = config::video.vt.hdr_min_luminance_macos,
+                                                                   .max_cll_nits = config::video.vt.hdr_max_cll_macos,
+                                                                   .max_fall_nits = config::video.vt.hdr_max_fall_macos,
+                                                                 });
 
       // Chromaticities travel as integers normalised to 50000, the peak luminance in nits and the
       // black luminance in ten-thousandths of a nit, which is what `video.cpp` turns back into the

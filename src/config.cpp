@@ -1721,6 +1721,15 @@ namespace config {
     // a host that never asks for HDR captures exactly what it captured before.
     string_restricted_f(vars, "capture_dynamic_range_macos", video.vt.capture_dynamic_range_macos, {"sdr"sv, "hdr_local"sv, "hdr_canonical"sv});
 
+    // The HDR10 luminances are configuration options so a tuned value survives a reboot, which an
+    // environment override does not. -1 means "derive it", see `macos_hdr::mastering_defaults()`; the
+    // `LUMEN_HDR_*` variables still win over these when they are set, because they are the knob used
+    // while measuring a client.
+    double_between_f(vars, "hdr_max_luminance_macos", video.vt.hdr_max_luminance_macos, {-1.0, 10000.0});
+    double_between_f(vars, "hdr_min_luminance_macos", video.vt.hdr_min_luminance_macos, {-1.0, 100.0});
+    double_between_f(vars, "hdr_max_cll_macos", video.vt.hdr_max_cll_macos, {-1.0, 10000.0});
+    double_between_f(vars, "hdr_max_fall_macos", video.vt.hdr_max_fall_macos, {-1.0, 10000.0});
+
     std::string vaapi_quality;
     string_f(vars, "vaapi_quality", vaapi_quality);
     if (!vaapi_quality.empty()) {

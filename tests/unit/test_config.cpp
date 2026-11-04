@@ -244,3 +244,41 @@ TEST(MacosHdrCaptureConfig, KeepsTheDynamicRangeAlreadyInEffect) {
   config::video = original_video;
   config::modified_config_settings = original_modified_config_settings;
 }
+
+/**
+ * @brief The synthesised HDR10 luminances are configuration options, so a tuned value survives a reboot.
+ *
+ * The environment variables still win over these at the point the metadata is written, but only these
+ * are read from sunshine.conf, which is the only thing that outlives `open --env`.
+ */
+TEST(MacosHdrMetadataConfig, ReadsTheConfiguredLuminances) {
+  const config::video_t original_video = config::video;
+  const decltype(config::modified_config_settings) original_modified_config_settings = config::modified_config_settings;
+
+  config::apply_config_for_test(
+    "hdr_max_luminance_macos = 500\n"
+    "hdr_min_luminance_macos = 0.005\n"
+    "hdr_max_cll_macos = 400\n"
+    "hdr_max_fall_macos = 200\n"sv
+  );
+
+  EXPECT_DOUBLE_EQ(500.0, config::video.vt.hdr_max_luminance_macos);
+  EXPECT_DOUBLE_EQ(0.005, config::video.vt.hdr_min_luminance_macos);
+  EXPECT_DOUBLE_EQ(400.0, config::video.vt.hdr_max_cll_macos);
+  EXPECT_DOUBLE_EQ(200.0, config::video.vt.hdr_max_fall_macos);
+
+  // -1 is the sentinel meaning "derive it", and 0 on a content light level means "leave it out".
+  config::apply_config_for_test(
+    "hdr_max_luminance_macos = -1\n"
+    "hdr_max_cll_macos = 0\n"sv
+  );
+  EXPECT_DOUBLE_EQ(-1.0, config::video.vt.hdr_max_luminance_macos);
+  EXPECT_DOUBLE_EQ(0.0, config::video.vt.hdr_max_cll_macos);
+
+  // A peak beyond anything a display reaches is refused, and the previous value stays in effect.
+  config::apply_config_for_test("hdr_max_luminance_macos = 20000\n"sv);
+  EXPECT_DOUBLE_EQ(-1.0, config::video.vt.hdr_max_luminance_macos);
+
+  config::video = original_video;
+  config::modified_config_settings = original_modified_config_settings;
+}

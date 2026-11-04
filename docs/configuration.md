@@ -3296,6 +3296,125 @@ supported on the current platform.
     </tr>
 </table>
 
+### hdr_max_luminance_macos
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The mastering display peak luminance written into the HDR10 metadata of a captured macOS
+            stream, in cd/m2. macOS publishes no mastering metadata for a screen, so this number is
+            synthesised. -1 derives it from the captured display: about 100 cd/m2 of standard dynamic
+            range white times the display's extended dynamic range headroom, which is the brightest
+            picture the host can actually render and can therefore never be over-declared. Clients use
+            the declared peak differently; some normalise the whole picture by it, which makes an
+            over-declared peak render the entire frame darker, standard dynamic range desktop included.
+            @note{This option only applies when using macOS with an HDR capture.}
+            @note{The LUMEN_HDR_MAX_LUMINANCE environment variable still wins over this option, because
+            it is the knob used while measuring how a client responds.}
+            @note{See docs/macos_hdr.md sections 10 and 12 for the measurements behind the default.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            -1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hdr_max_luminance_macos = 500
+            hdr_max_luminance_macos = -1
+            @endcode</td>
+    </tr>
+</table>
+
+### hdr_min_luminance_macos
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The mastering display black luminance written into the HDR10 metadata of a captured macOS
+            stream, in cd/m2. -1 declares 0.005 cd/m2, the value this platform has always written. A
+            client that shows its own user interface over the stream may lift the black of the picture,
+            in which case a higher value here is closer to what the user sees.
+            @note{This option only applies when using macOS with an HDR capture.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            -1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hdr_min_luminance_macos = 0.005
+            hdr_min_luminance_macos = 0.05
+            @endcode</td>
+    </tr>
+</table>
+
+### hdr_max_cll_macos
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The maxContentLightLevel written into the HDR10 metadata of a captured macOS stream, in
+            cd/m2. It describes the brightest content in any frame, not the panel. -1 follows the
+            declared maximum luminance. 0 leaves the content light level side data out of the stream,
+            which is what to try for a client that renders the metadata badly. Anything larger than the
+            declared maximum luminance is content that cannot exist, so it is clamped down to it.
+            @note{This option only applies when using macOS with an HDR capture.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            -1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hdr_max_cll_macos = 400
+            hdr_max_cll_macos = 0
+            @endcode</td>
+    </tr>
+</table>
+
+### hdr_max_fall_macos
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The maxFrameAverageLightLevel written into the HDR10 metadata of a captured macOS stream, in
+            cd/m2. It describes the brightest average frame, which is the number a client with automatic
+            brightness most likely uses. -1 and 0 both leave it out of the stream, as this platform always
+            has, because nothing on macOS measures it. Anything larger than the declared maximum luminance
+            is clamped down to it.
+            @note{This option only applies when using macOS with an HDR capture.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            -1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hdr_max_fall_macos = 200
+            @endcode</td>
+    </tr>
+</table>
+
 ## VA-API Encoder
 
 ### vaapi_blbrc

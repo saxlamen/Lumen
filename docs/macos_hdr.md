@@ -522,30 +522,46 @@ path would be a lie.
 
 `sc_display_t::get_hdr_metadata()` writes the BT.2020 primaries and D65 white point from the
 specification, because section 10.2 found no mastering-display attachment to read, and the luminances
-from `macos_hdr::mastering_defaults()`:
+from `macos_hdr::mastering_defaults()`. Every number is resolved most specific first: the environment,
+then sunshine.conf, then derived from the captured screen.
 
-| Variable | Default | Written as |
-|---|---|---|
-| `LUMEN_HDR_MAX_LUMINANCE` | 1000 cd/m² | `maxDisplayLuminance`, in nits |
-| `LUMEN_HDR_MIN_LUMINANCE` | 0.005 cd/m² | `minDisplayLuminance`, in units of 1/10000 cd/m² |
-| `LUMEN_HDR_MAX_CLL` | 1000 cd/m² | `maxContentLightLevel`, in nits |
-| `LUMEN_HDR_MAX_FALL` | 0 cd/m² | `maxFrameAverageLightLevel`, in nits |
+| Field | Environment | Configuration | Unset means | Written as |
+|---|---|---|---|---|
+| Peak | `LUMEN_HDR_MAX_LUMINANCE` | `hdr_max_luminance_macos` | -1: 100 cd/m² of SDR white times the screen's EDR headroom | `maxDisplayLuminance`, in nits |
+| Black | `LUMEN_HDR_MIN_LUMINANCE` | `hdr_min_luminance_macos` | -1: 0.005 cd/m² | `minDisplayLuminance`, in units of 1/10000 cd/m² |
+| maxCLL | `LUMEN_HDR_MAX_CLL` | `hdr_max_cll_macos` | -1: follows the resolved peak | `maxContentLightLevel`, in nits |
+| maxFALL | `LUMEN_HDR_MAX_FALL` | `hdr_max_fall_macos` | -1: leave it out | `maxFrameAverageLightLevel`, in nits |
 
-They are environment variables rather than configuration options because they are an experiment, not a
-preference: section 10.9 concluded that the mastering block is the only lever that could lift the
-100 cd/m² white of section 10.3 without a GPU pass, and section 10.9 also says whether it does is an
-on-device measurement. Setting `LUMEN_HDR_MAX_CLL` and `LUMEN_HDR_MAX_FALL` to 0 makes `src/video.cpp`
-leave the content light level side data out altogether. The values in effect are logged on every HDR
-session start.
+They began as environment variables only, because they were an experiment and the section 10.9 question
+of whether a client reacts to them at all was still open. Section 12 answered that they do react, and an
+experiment that works has to survive a reboot, which `open --env` does not: the app starts as a login
+item, and a login item inherits neither a shell environment nor a `launchctl setenv` made after login.
+So the configuration options are the normal way to set them, and the environment keeps the first word
+because it is still the knob used while measuring a client. A content light level of 0, from either
+source, makes `src/video.cpp` leave that side data out of the stream, which is what to try for a client
+that renders the metadata badly. Anything above the declared peak is clamped down to it: content
+brighter than its own mastering display cannot exist, and the mismatch is a reasonable thing for a
+renderer to clamp on, which the 245-against-1000 rounds of section 12 ran with. The values in effect are
+logged on every HDR session start.
+
+Deriving the peak rather than shipping a constant is section 12.4 item 4's conclusion. 1000 cd/m² was a
+number copied from a Linux panel; on this host the brightest picture that can exist is 500 cd/m², and
+section 12 measured that a declared peak above what the content reaches makes the whole frame darker on
+this client. A derived default is right on a host nobody has measured yet, and it can never
+over-declare.
 
 ### 11.5 Tests
 
-`tests/unit/platform/macos/test_hdr_capture.cpp` covers the decision, the tunables and the metadata
-scaling. `tests/unit/test_config.cpp` gained `MacosHdrCaptureConfigTest`, which reads the option through
-the real parser from sunshine.conf text, and one test that pins the "unknown value keeps the current
-value" behaviour. The ScreenCaptureKit, AppKit and sysctl calls in `display.mm` and `sc_capture.m` are
-not covered automatically, exactly as with the rest of the capture backends; the session log is the
-check, see section 11.6.
+`tests/unit/platform/macos/test_hdr_capture.cpp` covers the decision, the metadata resolution and the
+chromaticity scaling. The resolution tests pin the three sources in order, the derivation from headroom
+including a screen that cannot do HDR and a headroom that is not a number, the clamp of a content light
+level above the declared peak, and that a configured or environment 0 still suppresses the side data.
+`tests/unit/test_config.cpp` gained `MacosHdrCaptureConfigTest`, which reads the capture switch through
+the real parser from sunshine.conf text, `MacosHdrMetadataConfig`, which reads the four luminances the
+same way and pins that a value outside the accepted range is refused, and one test that pins the
+"unknown value keeps the current value" behaviour. The ScreenCaptureKit, AppKit and sysctl calls in
+`display.mm` and `sc_capture.m` are not covered automatically, exactly as with the rest of the capture
+backends; the session log is the check, see section 11.6.
 
 ### 11.6 What the first HDR session still has to answer
 
@@ -556,7 +572,8 @@ check, see section 11.6.
 2. Watch the client. VoidLink needs "Request HDR Video" on, see section 10.9. Then the A/B from that
    section: raise `LUMEN_HDR_MAX_LUMINANCE` and see whether the picture brightens. If it does, the
    metadata route works and decision 3 stays satisfied forever. If it does not, the 100 cd/m² question
-   is reopened, not answered with a shader.
+   is reopened, not answered with a shader. Answered on 2026-11-02, see section 12: it does, with the
+   opposite sign.
 3. Check the stream, not just the capture. Nothing in `src/` sets
    `kVTCompressionPropertyKey_HDRMetadataInsertionMode`, so VideoToolbox keeps its default `Auto`, and
    whether the encoded stream carries BT.2020 primaries, the PQ transfer, the mastering SEI written from
@@ -569,3 +586,151 @@ check, see section 11.6.
    `nv12_zero_device::set_frame()` is the place to re-take the decision.
 5. Checklist items 3 and 5 of section 7 are still open, and item 5 is the same object as V6a in
    `docs/macos_latency_audit.md`.
+
+## 12. On-device A/B: the mastering block behaves like a global gain, 2026-11-02
+
+Section 11.6 item 2 asked whether `LUMEN_HDR_MAX_LUMINANCE` changes anything the client shows. It
+changes everything, and with the opposite sign to a mastering display: declaring a *higher* peak makes
+the picture *darker*.
+
+### 12.1 What was varied
+
+`capture_dynamic_range_macos = hdr_canonical` in sunshine.conf throughout, `LUMEN_HDR_MAX_LUMINANCE`
+changed by relaunching the app with `open -n --env LUMEN_HDR_MAX_LUMINANCE=<n> /Applications/Sunshine.app`,
+VoidLink streaming fullscreen. The client is a 13-inch iPad Pro with the M4 tandem OLED panel: 2752x2048,
+ProMotion 10-120 Hz, and per Apple's specifications around 1000 cd/m² of full-screen brightness with a
+1600 cd/m² HDR peak. That is a brighter panel than the host display, and it explains why the same declared
+peak reads differently on the two ends; it does not change what should be declared, because the declared
+value describes the content the host produced, see section 12.4 item 4. It does mean any value tuned here
+belongs to this host and this client together. The 2048x1536 in the client's overlay is 4:3, which matches
+that panel and is what identifies the photographs in section 12.2 as the client rather than the host's own
+mirror. Auto-brightness and True Tone move the measured levels by more than the effect being measured, so
+rounds should be taken with brightness locked. Rounds, in order: 1000 (the built-in default), 245, 4000, `sdr` (capture
+switch off), then 245 against 4000 again as a controlled pair, then 500. Every round was confirmed on the
+host log at the same minute: `Capturing hdr_canonical HDR from display ...`, `Color coding: HDR (Rec. 2020
++ SMPTE 2084 PQ)`, `Color depth: 10-bit`, and `Synthesised HDR10 metadata ... peak <n> nits` on the
+25 Mbps session line, not only on the 1 Mbps encoder-validation pass.
+
+### 12.2 How it was measured, and what the method can and cannot see
+
+The quantity of interest is light leaving a panel, so the input is photographs of the client device.
+
+- A screenshot records what the app submitted, not what the panel emitted. If the scaling happened in
+  display composition, two screenshots would read identical while the eye sees a difference. That test is
+  still open, section 12.6.
+- AE/AF lock is not sufficient. In the controlled pair the two physical references in frame, the wall
+  behind the device and the keyboard in front of it, both moved by +21% and +25% between the 245 and the
+  4000 shot, so the camera gain itself shifted. Absolute patch levels are therefore not comparable across
+  shots; every patch in a shot is divided by that same shot's wall patch, which cancels gain and ambient
+  at once. Framing also moved by a few percent, which is why patches were chosen as fractions of the
+  frame and re-checked per shot.
+- Pasting an image into a chat re-encodes it: the four photographs arrived as Display P3 8-bit JPEG with
+  no HDR signal left. Originals were analysed with `sips` plus a small linear-luma percentile tool over
+  named patches (percentiles of luma after sRGB decode; ratios are exposure invariant). The tool is
+  `scripts/lumastats.swift`: `swiftc -O -o lumastats scripts/lumastats.swift && ./lumastats <img>...`.
+
+### 12.3 Results
+
+Uncontrolled round, normalised by the SDR white inside the same photograph (the YouTube UI band, whose
+p99 was 0.583-0.597 in all four shots, so the shots were comparable conditions):
+
+| declared peak | video highlights p99 | video blacks p5 | patch contrast p95/p5 |
+| --- | --- | --- | --- |
+| 1000 | 1.05x white | 0.38% of white | 109 |
+| 245 | 0.93x white | 0.30% of white | 155 |
+| 4000 | 0.49x white | 1.36% of white | 26 |
+| HDR capture off (`sdr`) | 0.86x white | 0.66% of white | 58 |
+
+Controlled AE-locked pair, normalised by the wall in the same photograph:
+
+| declared peak | SDR desktop, right of the video | video highlights p99 | video blacks p5 | patch contrast p95/p5 |
+| --- | --- | --- | --- | --- |
+| 245 | 0.268 | 0.912 | 0.0038 | 84 |
+| 4000 | 0.191, that is 0.71x | 0.580, 0.64x | 0.0068, 1.8x | 38, 0.45x |
+
+The two rounds agree in sign and roughly in size, which is the point of repeating it: the effect is
+reproducible and is not a frame of video, a framing change, or camera gain. Turning HDR capture off also
+moved the picture in the expected direction, consistent with section 10.5, where SDR capture clips EDR
+content at 940 codes while the clip in section 10.6 peaks at 2.45x white.
+
+### 12.4 What it means
+
+1. `maxLuminance` is a whole-frame scale reference on this client, not a ceiling for highlights alone.
+   The proof is the region that moved in the controlled pair: the desktop wallpaper to the right of the
+   video contains no highlight content at all, is SDR in the stream, and went 29% darker when only the
+   declared peak changed. VoidLink, or rather AVSampleBuffer rendering of a PQ picture with MDCV
+   metadata, therefore does not anchor SDR white at 100 cd/m² and tone-map only the top of the range; it
+   normalises the picture by the declared peak.
+2. Section 10.9's question is answered and decision 3 of section 4 holds: the deficit can be moved with
+   metadata alone, no GPU pass. Lower declared peak, brighter picture and deeper blacks; higher, darker
+   and lifted. "HDR looks brighter than SDR" is only true while the declared peak is not far above what
+   the content actually reaches, which the 4000 round shows by looking worse than HDR capture off.
+3. The response is a soft curve, not a division: 16x the declared peak produced 0.71x the light. So the
+   right value cannot be computed from the ratio, it has to be read off a ladder of measurements.
+4. Two bounds are not guesses. The content cannot be brighter than 100 cd/m² times the screen's EDR
+   headroom, which is 500 cd/m² on this machine, section 10.4, so anything declared above that is
+   over-declared by construction and the built-in default of 1000 over-declares by 2x here. And the
+   content peak measured in section 10.6 is 245-264 cd/m², so declaring below that trades highlight
+   separation for overall brightness. The reasonable values live between those two numbers, and the
+   shipped default is derived from headroom, `round(100 * maximumPotentialEDR)`, rather than a constant
+   copied from a Linux panel. That is `hdr_max_luminance_macos = -1`, and writing `= 500` on this host
+   states the same number explicitly.
+5. `maxCLL` must never exceed `maxLuminance`, because content brighter than its own mastering display
+   cannot exist. The rounds above ran with peak 245 against `maxCLL` 1000, which the resolver now clamps
+   away in both directions, configured and environment alike. Whether `maxCLL` is worth anything on its
+   own to this client is still an open measurement.
+6. The tuning is client-specific. A renderer that follows the spec anchors SDR white at 100 cd/m² and
+   would show no global change at all when the declared peak moves, so a low value optimised for VoidLink
+   is not automatically right for the next client, while an over-declared peak is wrong for everyone.
+   That asymmetry is the argument for a derived, never-over-declared default, and for the environment
+   variable keeping precedence over the configuration option while the ladder of section 12.6 is still
+   missing: measuring a client should not require editing sunshine.conf and restarting the host.
+
+### 12.5 Session quality observed while HDR was on
+
+VoidLink's overlay during the HDR session: 2048x1536 at 58.67 FPS, HEVC Main 10 HDR, 18.2 Mbps average
+with 40.2 Mbps peak, `Frames buffered: 1.0`, host processing 7.6/11.8/8.3 ms, network 8 ms with 3 ms
+variance, decode 1.90/6.02/2.94 ms, `Frames dropped by network/pacing jitter: 0.0% / 3.3%`, renderer
+`AVSampleBuffer (Queue Pacing)`. The host logged 36.6-44.6 Mbps, `Opus initialized: 48 kHz, 2 channels,
+512 kbps (total), LOWDELAY`, and the audio aggregate device granted a 240 frame, 5 ms IO procedure.
+
+Reading it: the only imperfect number is the client's 3.3% of frames dropped by render pacing at a 1.0
+frame buffer, which is roughly two frames a second and is what a slow pan looks like. Network loss, host
+processing and decode are all nowhere near a frame period, so the judder is client presentation, not the
+HDR path and not bandwidth. VoidLink exposes that directly, `framePacingMode` with `Off`, `Legacy` and
+`Queue` (`VoidLink/Database/DataManager.h:64`); Queue is what the overlay reported. Late frames are
+dropped in Queue mode and displayed late in the others, so for watching rather than playing, the other
+modes trade a little latency for no drops. Nothing in this data speaks to the audio-visual mismatch: the
+overlay reports no audio figure, VoidLink has no audio offset or sync setting in its source, and Lumen
+logs no audio output latency, so that symptom is currently uninstrumented on both ends.
+
+### 12.6 Still open
+
+1. Screenshot against photograph: do two screenshots, 245 and 4000, analyse the originals. If they differ,
+   every later round becomes camera free and exact; if they match while the eye sees a difference, the
+   scaling is happening at composition and only photographs or a screen recording can see it.
+2. The ladder: 150, 245, 350, 500, 1000 with the same paused frame and AE locked, against a reference of
+   the same clip played natively on the device, which is the definition of "correct brightness". The
+   crossing point is the value to ship.
+3. Whether `maxCLL` has an effect of its own, tested with `maxCLL` paired to the peak and with it dropped.
+4. Section 11.6 items 3 and 4, the encoded stream's own colour tags and the renegotiation path, are still
+   uninspected.
+5. ProMotion is confirmed on the client, a 10-120 Hz adaptive panel presenting a 60 FPS stream. Whether
+   that interacts with `Queue` pacing is untested, and 24 FPS content captured on the host's 60 Hz display
+   arrives as a 2-3-2-3 pattern of repeats, which is judder the panel cannot remove because it is already
+   in the stream. Checking the clip's frame rate is the five second version of that test.
+6. Source cadence has not been ruled out as the cause of the judder. Content at 24 or 30 FPS captured on
+   a 60 Hz display arrives as an uneven pattern of repeats, which reads as stutter while every latency
+   number stays green. The discriminator is a native 60 FPS clip and plain desktop scrolling: if those
+   are smooth and only 24/30 FPS video judders, the pipeline is not at fault. Dropping or delaying frames
+   in bursts is also the one mechanism that could account for the audio complaint in the same breath,
+   since a dropped frame moves the picture relative to an audio clock that keeps running.
+7. The host was running AI inference with the GPU saturated during these observations, which was never
+   ruled out and is the strongest remaining explanation: ScreenCaptureKit capture and VideoToolbox
+   encoding share that GPU, and `vt_drain` defaults to 1, one drain per submission, which makes the
+   submission loop wait for the encoder. Under contention that stall is not visible in the client's
+   "host processing latency" figure, but it does make frames arrive late enough for `Queue` pacing to
+   drop them. The test is the same content and the same client settings with the inference stopped, and
+   `sudo powermetrics --samplers tasks --show-process-gpu` to see who owns the GPU. If load is the cause,
+   `vt_drain = 0` trades latency for absorbing it, which is the right trade for watching video.
+
