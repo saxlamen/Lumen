@@ -548,7 +548,9 @@ Deriving the peak rather than shipping a constant is section 12.4 item 4's concl
 number copied from a Linux panel; on this host the brightest picture that can exist is 500 cd/m², and
 section 12 measured that a declared peak above what the content reaches makes the whole frame darker on
 this client. A derived default is right on a host nobody has measured yet, and it can never
-over-declare.
+over-declare. Installed with no configuration entry and no environment override, a session on this host
+logged `peak 500 nits, black 0.005 nits, maxCLL 500 nits, maxFALL 0 nits` on a screen reporting five
+headroom, which is the derivation and the content light level pairing both arriving without being told.
 
 ### 11.5 Tests
 
