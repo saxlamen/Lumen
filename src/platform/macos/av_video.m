@@ -25,7 +25,7 @@
     [result addObject:@{
       @"id": [NSNumber numberWithUnsignedInt:displays[i]],
       @"name": [NSString stringWithFormat:@"%d", displays[i]],
-      @"displayName": [self getDisplayName:displays[i]],
+      @"displayName": [self getDisplayName:displays[i]] ?: @"Unknown Display",
     }];
   }
 
