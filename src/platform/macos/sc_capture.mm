@@ -266,6 +266,14 @@ API_AVAILABLE(macos(14.0))
     config.showsCursor = YES;
     config.captureResolution = SCCaptureResolutionBest;
     config.preservesAspectRatio = YES;
+    if (self.captureDynamicRange != 0) {
+      if (@available(macOS 15.0, *)) {
+        config.captureDynamicRange = (self.captureDynamicRange == 2)
+                                       ? SCCaptureDynamicRangeHDRCanonicalDisplay
+                                       : SCCaptureDynamicRangeHDRLocalDisplay;
+        config.colorSpaceName = kCGColorSpaceITUR_2100_PQ;
+      }
+    }
     // Slightly below the target interval: an interval of exactly 1/fps beats against
     // WindowServer's delivery clock and suppresses frames that arrive marginally early.
     const int fps = MAX(self.frameRate, 1);

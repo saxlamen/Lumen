@@ -50,6 +50,10 @@ API_AVAILABLE(macos(14.0))
  * @brief Output frame height property.
  */
 @property (nonatomic, assign) int frameHeight;
+/**
+ * @brief Capture dynamic range mode (0 = SDR, 1 = HDR local, 2 = HDR canonical).
+ */
+@property (nonatomic, assign) int captureDynamicRange;
 
 /**
  * @brief Content filter selecting the captured display.

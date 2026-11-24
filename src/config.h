@@ -128,6 +128,11 @@ namespace config {
     struct {
       int vt_realtime;  ///< Whether VideoToolbox uses realtime encoding mode.
       int vt_coder;  ///< VideoToolbox entropy-coding mode.
+      std::string capture_dynamic_range_macos {"sdr"};  ///< ScreenCaptureKit dynamic range: sdr, hdr_local, or hdr_canonical.
+      double hdr_max_luminance_macos {-1.0};  ///< HDR10 mastering peak luminance (nits); -1 derives from display EDR headroom.
+      double hdr_min_luminance_macos {-1.0};  ///< HDR10 mastering black luminance (nits); -1 uses 0.005.
+      double hdr_max_cll_macos {-1.0};  ///< HDR10 MaxCLL (nits); -1 follows peak, 0 omits.
+      double hdr_max_fall_macos {-1.0};  ///< HDR10 MaxFALL (nits); -1 and 0 omit.
     } vt;  ///< VideoToolbox encoder options.
 
     struct {

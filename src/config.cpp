@@ -1744,6 +1744,11 @@ namespace config {
 
     int_f(vars, "vt_coder", video.vt.vt_coder, vt::coder_from_view);
     int_f(vars, "vt_realtime", video.vt.vt_realtime, vt::rt_from_view);
+    string_restricted_f(vars, "capture_dynamic_range_macos", video.vt.capture_dynamic_range_macos, {"sdr"sv, "hdr_local"sv, "hdr_canonical"sv});
+    double_between_f(vars, "hdr_max_luminance_macos", video.vt.hdr_max_luminance_macos, {-1.0, 10000.0});
+    double_between_f(vars, "hdr_min_luminance_macos", video.vt.hdr_min_luminance_macos, {-1.0, 100.0});
+    double_between_f(vars, "hdr_max_cll_macos", video.vt.hdr_max_cll_macos, {-1.0, 10000.0});
+    double_between_f(vars, "hdr_max_fall_macos", video.vt.hdr_max_fall_macos, {-1.0, 10000.0});
 
     std::string vaapi_quality;
     string_f(vars, "vaapi_quality", vaapi_quality);

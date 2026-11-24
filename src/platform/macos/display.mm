@@ -22,6 +22,7 @@
 #include "src/platform/macos/av_img_t.h"
 #include "src/platform/macos/av_video.h"
 #include "src/platform/macos/display_helpers.h"
+#include "src/platform/macos/hdr_capture.h"
 #include "src/platform/macos/misc.h"
 #import "src/platform/macos/sc_capture.h"
 #include "src/platform/macos/sc_capture_loop.h"
@@ -57,9 +58,39 @@ namespace platf {
       return display_id;
     }
 
-    OSType videotoolbox_pixel_format(const video::config_t &config) {
-      const auto colorspace {video::colorspace_from_client_config(config, false)};
+    OSType videotoolbox_pixel_format(const video::config_t &config, bool is_hdr = false) {
+      const auto colorspace {video::colorspace_from_client_config(config, is_hdr)};
       return colorspace.bit_depth == 10 ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+    }
+
+    /**
+     * @brief Query the potential EDR headroom for a macOS display.
+     *
+     * @param display_id CoreGraphics display identifier.
+     * @return Potential EDR headroom (> 1.0 when HDR-capable), or 1.0 when unavailable.
+     */
+    double screen_edr_headroom(CGDirectDisplayID display_id) {
+      for (NSScreen *screen in [NSScreen screens]) {
+        NSNumber *screen_number = screen.deviceDescription[@"NSScreenNumber"];
+        if (screen_number != nil && [screen_number unsignedIntValue] == display_id) {
+          return static_cast<double>(screen.maximumPotentialExtendedDynamicRangeColorComponentValue);
+        }
+      }
+      return 1.0;
+    }
+
+    /**
+     * @brief Report whether this system supports ScreenCaptureKit HDR capture.
+     *
+     * @return True on macOS 15+ Apple Silicon.
+     */
+    bool platform_supports_sc_hdr() {
+#if defined(__arm64__) || defined(__aarch64__)
+      if (@available(macOS 15.0, *)) {
+        return true;
+      }
+#endif
+      return false;
     }
 
     /**
@@ -410,10 +441,52 @@ namespace platf {
     SCCapture *sc_capture {};  ///< ScreenCaptureKit capture controller.
     CGDirectDisplayID display_id {};  ///< Display ID.
     std::unique_ptr<display_device::DisplayPowerGuardInterface> display_power_guard;  ///< Display power guard.
+    bool hdr_active {false};  ///< True when ScreenCaptureKit HDR capture is active for this session.
+    double edr_headroom {1.0};  ///< Captured display's potential EDR headroom.
 
     ~sc_display_t() override {
       [sc_capture stopCapture];
       [sc_capture release];
+    }
+
+    /**
+     * @brief Report whether this display is capturing in HDR.
+     *
+     * @return True when HDR capture is active.
+     */
+    bool is_hdr() override {
+      return hdr_active;
+    }
+
+    /**
+     * @brief Populate synthesised HDR10 mastering and content light metadata for this display.
+     *
+     * @param metadata Output HDR metadata struct.
+     * @return True when HDR is active and metadata was populated.
+     */
+    bool get_hdr_metadata(SS_HDR_METADATA &metadata) override {
+      if (!hdr_active) {
+        return false;
+      }
+
+      const macos_hdr::mastering_config_t cfg {
+        .max_luminance_nits = config::video.vt.hdr_max_luminance_macos,
+        .min_luminance_nits = config::video.vt.hdr_min_luminance_macos,
+        .max_cll_nits = config::video.vt.hdr_max_cll_macos,
+        .max_fall_nits = config::video.vt.hdr_max_fall_macos,
+      };
+      const auto defaults = macos_hdr::mastering_defaults(edr_headroom, cfg);
+
+      macos_hdr::scale_chromaticity(macos_hdr::kBt2020RedX, macos_hdr::kBt2020RedY, metadata.displayPrimaries[0].x, metadata.displayPrimaries[0].y);
+      macos_hdr::scale_chromaticity(macos_hdr::kBt2020GreenX, macos_hdr::kBt2020GreenY, metadata.displayPrimaries[1].x, metadata.displayPrimaries[1].y);
+      macos_hdr::scale_chromaticity(macos_hdr::kBt2020BlueX, macos_hdr::kBt2020BlueY, metadata.displayPrimaries[2].x, metadata.displayPrimaries[2].y);
+      macos_hdr::scale_chromaticity(macos_hdr::kWhitePointX, macos_hdr::kWhitePointY, metadata.whitePoint.x, metadata.whitePoint.y);
+
+      metadata.maxDisplayLuminance = static_cast<std::uint16_t>(std::llround(defaults.max_luminance_nits));
+      metadata.minDisplayLuminance = static_cast<std::uint16_t>(std::llround(defaults.min_luminance_nits * 10000.0));
+      metadata.maxContentLightLevel = defaults.max_cll_nits;
+      metadata.maxFrameAverageLightLevel = defaults.max_fall_nits;
+      return true;
     }
 
     capture_e capture(const push_captured_image_cb_t &push_captured_image_cb, const pull_free_image_cb_t &pull_free_image_cb, bool *cursor) override {
@@ -559,8 +632,24 @@ namespace platf {
           display->height = display->sc_capture.frameHeight;
           display_helpers::init_display_geometry(*display, display_id);
 
+          const auto requested_range = macos_hdr::dynamic_range_from_view(config::video.vt.capture_dynamic_range_macos);
+          const double edr_headroom = screen_edr_headroom(display_id);
+          const macos_hdr::hdr_capture_request_t hdr_request {
+            .range = requested_range,
+            .maximum_potential_edr = edr_headroom,
+            .platform_supports_hdr = platform_supports_sc_hdr(),
+            .session_requests_10bit = config.dynamicRange > 0,
+          };
+          display->edr_headroom = edr_headroom;
+          display->hdr_active = macos_hdr::hdr_capture_enabled(hdr_request);
+          if (display->hdr_active) {
+            display->sc_capture.captureDynamicRange = static_cast<int>(requested_range);
+            BOOST_LOG(info) << "SCCapture HDR enabled (range="sv << macos_hdr::to_string(requested_range)
+                            << ", edr_headroom="sv << edr_headroom << ')';
+          }
+
           if (hwdevice_type == platf::mem_type_e::videotoolbox) {
-            const auto pixel_format {videotoolbox_pixel_format(config)};
+            const auto pixel_format {videotoolbox_pixel_format(config, display->hdr_active)};
             [display->sc_capture setFrameWidth:config.width frameHeight:config.height];
             display->sc_capture.pixelFormat = pixel_format;
           }
