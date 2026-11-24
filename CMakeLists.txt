@@ -61,6 +61,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # set version info for this build
 include(${CMAKE_MODULE_PATH}/prep/build_version.cmake)
+include_directories(${CMAKE_BINARY_DIR})
 
 # cmake build flags
 include(${CMAKE_MODULE_PATH}/prep/options.cmake)

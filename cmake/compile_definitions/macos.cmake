@@ -39,7 +39,8 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         ${IOKIT_LIBRARY}
         ${USER_NOTIFICATIONS_LIBRARY}
         ${SCREEN_CAPTURE_KIT_LIBRARY}
-        ${VIDEO_TOOLBOX_LIBRARY})
+        ${VIDEO_TOOLBOX_LIBRARY}
+        "-framework ServiceManagement")
 
 set(APPLE_PLIST_TEMPLATE "${SUNSHINE_SOURCE_ASSETS_DIR}/macos/build/Info.plist.in")
 set(APPLE_PLIST_FILE "${CMAKE_BINARY_DIR}/Info.plist")
@@ -59,6 +60,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/microphone.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/misc.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/misc.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/permissions.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/permissions.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/publish.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.mm"

@@ -49,6 +49,16 @@ namespace args {
   int creds(const char *name, int argc, char *argv[]);
 
   /**
+   * @brief Report and optionally request the macOS permissions Lumen needs.
+   *
+   * @param name The program name.
+   * @param argc The number of arguments passed to the command.
+   * @param argv The arguments passed to the command.
+   * @return 0 when every required permission is granted, 1 otherwise, 2 on bad usage.
+   */
+  int permissions(const char *name, int argc, char *argv[]);
+
+  /**
    * @brief Print help to stdout, then exit.
    * @param name The name of the program.
    * @examples

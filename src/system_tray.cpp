@@ -50,6 +50,7 @@
   #include <chrono>
   #include <csignal>
   #include <cstddef>
+  #include <cstdint>
   #include <filesystem>
   #include <format>
   #include <functional>
@@ -82,6 +83,11 @@
   #include "thread_safe.h"
   #ifdef _WIN32
     #include "platform/windows/utf_utils.h"
+  #elif defined(__APPLE__)
+    #include <dispatch/dispatch.h>
+
+    #include "platform/macos/misc.h"
+    #include "platform/macos/permissions.h"
   #endif
 
 using namespace std::literals;
@@ -286,6 +292,97 @@ namespace system_tray {
    */
   void tray_native_menu_click_cb([[maybe_unused]] struct tray *tray_icon) {
   }
+
+  /**
+   * @brief Storage for the macOS permission submenu labels.
+   *
+   * @return The label storage, one slot per submenu entry.
+   */
+  std::array<std::string, 7> &permission_menu_text_storage() {
+    static std::array<std::string, 7> storage;
+    return storage;
+  }
+
+  /**
+   * @brief Assign text and behavior to one permission submenu item.
+   *
+   * @tparam Callback Callback type accepted by the tray library.
+   * @param menu Submenu to populate.
+   * @param index Submenu index to populate.
+   * @param text User-visible menu text.
+   * @param disabled Whether the item is informational rather than actionable.
+   * @param callback Callback invoked for actionable items.
+   */
+  template<typename Callback = std::nullptr_t>
+  void set_permission_menu_item(
+    std::array<struct tray_menu, 7> &menu,
+    const std::size_t index,
+    std::string text,
+    const bool disabled,
+    Callback callback = nullptr
+  ) {
+    auto &menu_text = permission_menu_text_storage();
+    menu_text[index] = std::move(text);
+    menu[index] = {
+      .text = menu_text[index].c_str(),
+      .disabled = disabled,
+      .cb = callback,
+    };
+  }
+
+  void tray_permission_item_cb(struct tray_menu *item);
+  void tray_autostart_item_cb(struct tray_menu *item);
+
+  /**
+   * @brief Fill a permission submenu from what macOS says right now.
+   *
+   * @param menu Submenu to fill.
+   */
+  void fill_permission_menu(std::array<struct tray_menu, 7> &menu) {
+    menu = {};
+
+    const auto status = platf::macos::permission_status();
+    std::size_t index = 0;
+    for (; index < status.size() && index + 2 < menu.size(); ++index) {
+      set_permission_menu_item(
+        menu,
+        index,
+        std::format("{} - {}", status[index].name, status[index].granted ? "Granted" : "Needed"),
+        false,
+        tray_permission_item_cb
+      );
+    }
+
+    if (platf::autostart_supported() && index + 2 < menu.size()) {
+      set_permission_menu_item(
+        menu,
+        index,
+        std::format("Start at login - {}", platf::autostart_enabled() ? "On" : "Off"),
+        false,
+        tray_autostart_item_cb
+      );
+      ++index;
+    }
+
+    menu[index] = {.text = "-"};
+    set_permission_menu_item(menu, index + 1, "Quit and reopen Sunshine after granting", true);
+  }
+
+  /**
+   * @brief Build the permission submenu as things stand when the tray starts.
+   *
+   * @return The submenu entries, terminated by an empty entry.
+   */
+  std::array<struct tray_menu, 7> initial_permission_menu() {
+    std::array<struct tray_menu, 7> menu {};
+    fill_permission_menu(menu);
+    return menu;
+  }
+
+  static auto permission_menu = initial_permission_menu();  ///< macOS permission submenu.
+
+  void tray_permission_item_request(void *context);
+  void tray_autostart_item_request(void *context);
   #endif
 
   // Tray menu
@@ -299,6 +396,9 @@ namespace system_tray {
       (struct tray_menu[]) {
         // Tray menu labels currently use the project's English source strings.
         {.text = "Open Sunshine", .cb = tray_open_ui_cb},
+  #ifdef __APPLE__
+        {.text = "Permissions", .submenu = permission_menu.data()},
+  #endif
         {.text = "-"},
   #if defined(_WIN32) || defined(__APPLE__)
         {.text = "Virtual HID Broker", .submenu = virtualhid_license_menu.data()},
@@ -329,6 +429,80 @@ namespace system_tray {
     .allIconPaths = {TRAY_ICON, TRAY_ICON_LOCKED, TRAY_ICON_PLAYING, TRAY_ICON_PAUSING},
   #endif
   };
+
+  #ifdef __APPLE__
+  /**
+   * @brief Ask for the permission whose submenu item was clicked.
+   *
+   * @param context Submenu index of the permission to ask for.
+   */
+  void tray_permission_item_request(void *context) {
+    const auto index = static_cast<std::size_t>(reinterpret_cast<std::uintptr_t>(context));
+    const auto status = platf::macos::permission_status();
+    if (index >= status.size()) {
+      return;
+    }
+
+    BOOST_LOG(info) << "Asking for a macOS permission from the system tray: "sv << status[index].key;
+    platf::macos::request_permission(status[index].key, false);
+
+    const std::scoped_lock lock(tray_state_mutex());
+    if (tray_initialized_state().load()) {
+      fill_permission_menu(permission_menu);
+      tray_update(&tray);
+    }
+  }
+
+  /**
+   * @brief Turn start at login on or off, then republish the menu label.
+   *
+   * @param context Unused.
+   */
+  void tray_autostart_item_request([[maybe_unused]] void *context) {
+    const bool was_enabled = platf::autostart_enabled();
+    BOOST_LOG(info) << "Toggling start at login from the system tray: turning "sv << (was_enabled ? "off" : "on");
+
+    if (!platf::set_autostart_enabled(!was_enabled)) {
+      BOOST_LOG(warning) << "macOS did not accept the start-at-login change"sv;
+    }
+
+    const std::scoped_lock lock(tray_state_mutex());
+    if (tray_initialized_state().load()) {
+      fill_permission_menu(permission_menu);
+      tray_update(&tray);
+    }
+  }
+
+  /**
+   * @brief Handle a click on the start-at-login item.
+   *
+   * @param item The clicked submenu item.
+   */
+  void tray_autostart_item_cb([[maybe_unused]] struct tray_menu *item) {
+    dispatch_async_f(dispatch_get_main_queue(), nullptr, tray_autostart_item_request);
+  }
+
+  /**
+   * @brief Handle a click on one of the permission submenu items.
+   *
+   * @param item The clicked submenu item.
+   */
+  void tray_permission_item_cb(struct tray_menu *item) {
+    const auto *first = permission_menu.data();
+    std::size_t index = 0;
+    for (; index < permission_menu.size(); ++index) {
+      if (first + index == item) {
+        break;
+      }
+    }
+
+    if (index >= permission_menu.size()) {
+      return;
+    }
+
+    dispatch_async_f(dispatch_get_main_queue(), reinterpret_cast<void *>(static_cast<std::uintptr_t>(index)), tray_permission_item_request);
+  }
+  #endif
 
   #ifdef SUNSHINE_TESTS
   const struct tray &tray_data_for_testing() {
@@ -799,6 +973,10 @@ namespace system_tray {
       }
 
       tray_initialized_state().store(true);
+
+  #ifdef __APPLE__
+      platf::handle_quit_requests();
+  #endif
     }
 
     BOOST_LOG(info) << "System tray created"sv;

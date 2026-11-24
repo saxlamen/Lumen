@@ -38,9 +38,14 @@
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
+#include "lumen_version.h"
 #include "main.h"
 #include "nvhttp.h"
 #include "platform/permissions.h"
+#ifdef __APPLE__
+  #include "platform/macos/misc.h"
+  #include "platform/macos/permissions.h"
+#endif
 #include "process.h"
 #include "system_tray.h"
 #include "upnp.h"
@@ -78,6 +83,9 @@ void on_signal(int sig, FN &&fn) {
 std::map<std::string_view, std::function<int(const char *name, int argc, char **argv)>> cmd_to_func {
   {"creds"sv, [](const char *name, int argc, char **argv) {
      return args::creds(name, argc, argv);
+   }},
+  {"permissions"sv, [](const char *name, int argc, char **argv) {
+     return args::permissions(name, argc, argv);
    }},
   {"help"sv, [](const char *name, int, char **) {
      return args::help(name);
@@ -259,7 +267,16 @@ int main(int argc, char *argv[]) {
   // logging can begin at this point
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
-  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " (Lumen " << LUMEN_VERSION << ") commit: " << PROJECT_VERSION_COMMIT;
+
+#ifdef __APPLE__
+  platf::macos::ask_missing_permissions();
+  platf::macos::guide_missing_permissions_on_first_run();
+
+  // Start at login is on for a new installation, once, so that a machine set up for streaming is
+  // ready at the login window without anyone having to find the setting.
+  platf::ensure_autostart_default();
+#endif
 
   // Log publisher metadata
   log_publisher_data();

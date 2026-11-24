@@ -14,6 +14,8 @@
 
 // standard includes
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <memory>
 
@@ -28,7 +30,9 @@
 #include <ifaddrs.h>
 #include <mach-o/dyld.h>
 #include <net/if_dl.h>
+#include <objc/runtime.h>
 #include <pwd.h>
+#include <ServiceManagement/ServiceManagement.h>
 #include <sys/qos.h>
 #include <UserNotifications/UserNotifications.h>
 
@@ -533,6 +537,176 @@ namespace platf {
 
   std::uint32_t virtual_display_get_id() {
     return ::virtual_display_get_id();
+  }
+
+  void request_screen_capture_access() {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+#pragma clang diagnostic ignored "-Wtautological-pointer-compare"
+    if (CGRequestScreenCaptureAccess != nullptr) {
+      CGRequestScreenCaptureAccess();
+    }
+#pragma clang diagnostic pop
+  }
+
+  namespace {
+    /**
+     * @brief Answer a quit request from macOS by shutting the process down ourselves.
+     *
+     * @param self_ The delegate instance, which is Qt's.
+     * @param app The application asking to terminate.
+     * @return NSTerminateLater, because we terminate on our own schedule.
+     */
+    NSApplicationTerminateReply quit_requested([[maybe_unused]] id self_, NSApplication *app) {
+      BOOST_LOG(info) << "macOS asked Lumen to quit, exiting so it can be relaunched"sv;
+      [app replyToApplicationShouldTerminate:YES];
+      lifetime::exit_sunshine(0, true);
+      return NSTerminateLater;
+    }
+
+    /**
+     * @brief The login-item registration for this application, or nil on older systems.
+     *
+     * @return The shared service object, nil if the API or the bundle is unavailable.
+     */
+    SMAppService *autostart_service() {
+      if (@available(macOS 13.0, *)) {
+        return SMAppService.mainAppService;
+      }
+
+      return nil;
+    }
+  }  // namespace
+
+  void handle_quit_requests() {
+    static std::once_flag once;
+    std::call_once(once, []() {
+      id delegate = [NSApp delegate];
+      if (delegate == nil) {
+        BOOST_LOG(warning) << "No application delegate yet, so a quit request would go unanswered"sv;
+        return;
+      }
+
+      Class delegate_class = object_getClass(delegate);
+      SEL terminate = @selector(applicationShouldTerminate:);
+      IMP handler = imp_implementationWithBlock(^NSApplicationTerminateReply(id self_, NSApplication *app) {
+        return quit_requested(self_, app);
+      });
+
+      bool implemented_here = false;
+      unsigned method_count = 0;
+      Method *methods = class_copyMethodList(delegate_class, &method_count);
+      for (unsigned x = 0; x < method_count; ++x) {
+        if (method_getName(methods[x]) == terminate) {
+          implemented_here = true;
+          break;
+        }
+      }
+      free(methods);
+
+      if (implemented_here) {
+        method_setImplementation(class_getInstanceMethod(delegate_class, terminate), handler);
+      } else if (!class_addMethod(delegate_class, terminate, handler, "@@:@")) {
+        BOOST_LOG(warning) << "Could not take over the quit request on the application delegate"sv;
+        return;
+      }
+
+      BOOST_LOG(info) << "Now answering quit requests from macOS on behalf of " << class_getName(delegate_class);
+    });
+  }
+
+  bool autostart_supported() {
+    return autostart_service() != nil;
+  }
+
+  bool autostart_enabled() {
+    SMAppService *service = autostart_service();
+    if (service == nil) {
+      return false;
+    }
+
+    if (@available(macOS 13.0, *)) {
+      return service.status == SMAppServiceStatusEnabled;
+    }
+
+    return false;
+  }
+
+  bool set_autostart_enabled(const bool enabled) {
+    char executable_path[PATH_MAX] {};
+    uint32_t executable_size = sizeof(executable_path);
+    if (_NSGetExecutablePath(executable_path, &executable_size) != 0 || std::string {executable_path}.find("/Contents/MacOS/") == std::string::npos) {
+      return false;
+    }
+
+    SMAppService *service = autostart_service();
+    if (service == nil) {
+      return false;
+    }
+
+    NSError *error = nil;
+    BOOL ok = NO;
+    if (@available(macOS 13.0, *)) {
+      if (enabled) {
+        ok = [service registerAndReturnError:&error];
+      } else if (service.status != SMAppServiceStatusNotRegistered) {
+        ok = [service unregisterAndReturnError:&error];
+      } else {
+        ok = YES;
+      }
+    }
+
+    if (!ok) {
+      BOOST_LOG(warning) << (enabled ? "Could not register the login item" : "Could not remove the login item") << ": "
+                         << (error.localizedDescription.UTF8String ?: "unknown error");
+    }
+
+    return ok ? true : false;
+  }
+
+  void ensure_autostart_default() {
+    char executable_path[PATH_MAX] {};
+    uint32_t executable_size = sizeof(executable_path);
+    if (_NSGetExecutablePath(executable_path, &executable_size) != 0) {
+      return;
+    }
+
+    const std::string path {executable_path};
+    if (path.find("/Contents/MacOS/") == std::string::npos) {
+      return;
+    }
+
+    const auto home = getenv("HOME");
+    if (home == nullptr) {
+      return;
+    }
+
+    const std::string stamp_path = std::string {home} + "/.config/sunshine/autostart.stamp";
+    const auto file = std::filesystem::path {executable_path};
+    std::error_code ec;
+    const auto stamp = path + ":" + std::to_string(static_cast<long long>(std::filesystem::last_write_time(file, ec).time_since_epoch().count()));
+    if (ec) {
+      return;
+    }
+
+    std::ifstream existing {stamp_path};
+    std::string stored;
+    if (existing && std::getline(existing, stored) && stored == stamp) {
+      return;
+    }
+
+    std::filesystem::create_directories(std::filesystem::path {stamp_path}.parent_path(), ec);
+    std::ofstream handle {stamp_path};
+    if (!handle) {
+      return;
+    }
+
+    handle << stamp;
+    handle.close();
+
+    if (!autostart_enabled() && set_autostart_enabled(true)) {
+      BOOST_LOG(info) << "Enabled starting Lumen at login, which can be turned off in the login items of System Settings"sv;
+    }
   }
 
   static pid_t g_restart_child_pid = 0;  ///< PID of the restarted child process for signal forwarding.
