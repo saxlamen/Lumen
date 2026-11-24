@@ -45,5 +45,15 @@ else()
     target_link_libraries(install_lumax PRIVATE "-framework Cocoa")
 endif()
 
+# Keep the display helper beside the executable for both CLI and bundle builds.
+add_dependencies(sunshine vd_helper)
+if (NOT SUNSHINE_BUILD_HOMEBREW)
+    add_custom_command(TARGET sunshine POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "$<TARGET_FILE:vd_helper>" "$<TARGET_FILE_DIR:sunshine>/vd_helper"
+            COMMENT "Copying virtual display helper into the app bundle"
+            VERBATIM)
+endif()
+
 # Tell linker to dynamically load these symbols at runtime, in case they're unavailable:
 target_link_options(sunshine PRIVATE -Wl,-U,_CGPreflightScreenCaptureAccess -Wl,-U,_CGRequestScreenCaptureAccess)

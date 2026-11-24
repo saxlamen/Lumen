@@ -31,6 +31,10 @@ else()
             DESTINATION "${INSTALLER_BUNDLE_RESOURCES}"
             COMPONENT Runtime)
 
+    install(TARGETS vd_helper
+        RUNTIME DESTINATION "${MAC_BUNDLE_CONTENTS}/MacOS"
+        COMPONENT Runtime)
+
     install(TARGETS sunshine
         BUNDLE DESTINATION "${MAC_PAYLOAD_DIR}"
         COMPONENT Runtime)
@@ -141,6 +145,16 @@ qt6_deploy_runtime_dependencies(
                       message(FATAL_ERROR \"codesign failed while signing library: \${item}\")
                   endif()
               endforeach()
+          endif()
+
+          # Sign the nested helper before sealing the app bundle.
+          execute_process(COMMAND /usr/bin/codesign --verbose=2
+              --sign \"${APPLE_CODESIGN_IDENTITY}\" \"\${_app}/Contents/MacOS/vd_helper\"
+              --force --timestamp --options=runtime
+              RESULT_VARIABLE helper_rc
+          )
+          if(NOT helper_rc EQUAL 0)
+              message(FATAL_ERROR \"codesign failed while signing vd_helper\")
           endif()
 
           # Sign the app last

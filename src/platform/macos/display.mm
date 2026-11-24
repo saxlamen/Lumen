@@ -512,8 +512,14 @@ namespace platf {
       BOOST_LOG(debug) << "Unable to create display sleep prevention assertion"sv;
     }
 
-    // Default to main display
+    // Default to main display, or active virtual display when no explicit display is configured.
     CGDirectDisplayID display_id = CGMainDisplayID();
+    if (display_name.empty()) {
+      if (const auto vd_id = platf::virtual_display_get_id(); vd_id != 0) {
+        display_id = vd_id;
+        BOOST_LOG(info) << "Using virtual display ("sv << display_id << ") for streaming"sv;
+      }
+    }
 
     if (const auto configured_display_id {parse_display_id(display_name)}) {
       display_id = *configured_display_id;

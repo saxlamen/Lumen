@@ -1439,4 +1439,26 @@ namespace platf {
    */
   void drop_elevated_privileges(bool all_caps);
 
+  /**
+   * @brief Create a virtual display matching the requested resolution and refresh rate (macOS only).
+   *
+   * @param width Display width in pixels.
+   * @param height Display height in pixels.
+   * @param fps Refresh rate in Hz.
+   * @return The display ID of the created display, or 0 on failure.
+   */
+  std::uint32_t virtual_display_create(int width, int height, int fps);
+
+  /**
+   * @brief Destroy the currently active virtual display.
+   */
+  void virtual_display_destroy();
+
+  /**
+   * @brief Get the display ID of the currently active virtual display.
+   *
+   * @return The display ID, or 0 if no virtual display is active.
+   */
+  std::uint32_t virtual_display_get_id();
+
 }  // namespace platf

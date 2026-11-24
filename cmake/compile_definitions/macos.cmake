@@ -66,7 +66,28 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture_loop.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.mm"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/virtual_display.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/virtual_display.m"
         "${tpcircularbuffer_SOURCE_DIR}/TPCircularBuffer.c"
         "${tpcircularbuffer_SOURCE_DIR}/TPCircularBuffer.h"
         ${APPLE_ENTITLEMENTS_FILE}
         ${APPLE_PLIST_FILE})
+
+# virtual_display.m uses ARC (required for CGVirtualDisplay private API lifecycle management)
+set_source_files_properties(
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/virtual_display.m"
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+# Build vd_helper: standalone subprocess for creating CGVirtualDisplay
+add_executable(vd_helper "${CMAKE_SOURCE_DIR}/src/platform/macos/vd_helper.m")
+set_source_files_properties(
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/vd_helper.m"
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+target_link_libraries(vd_helper PRIVATE
+        "-framework Foundation"
+        "-framework AppKit"
+        "-framework CoreGraphics"
+        "-F/System/Library/PrivateFrameworks"
+        "-framework SkyLight")
+set_target_properties(vd_helper PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
