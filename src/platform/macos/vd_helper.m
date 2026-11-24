@@ -289,6 +289,16 @@ static NSArray<CGVirtualDisplayMode *> *buildDisplayModes(int width, int height,
 }
 
 int main(int argc, const char *argv[]) {
+  // Close all inherited file descriptors (especially parent listening sockets)
+  // so vd_helper never holds Lumax's network ports across restarts.
+  long openMax = sysconf(_SC_OPEN_MAX);
+  if (openMax <= 0 || openMax > 65536) {
+    openMax = 4096;
+  }
+  for (int fd = STDERR_FILENO + 1; fd < (int)openMax; fd++) {
+    close(fd);
+  }
+
   @autoreleasepool {
     if (argc != 4) {
       fprintf(stdout, "0\n");
@@ -510,6 +520,11 @@ int main(int argc, const char *argv[]) {
     // Keep alive via CFRunLoop and handle main-display switch signals
     while (!shouldExit) {
       CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, false);
+      if (getppid() == 1) {
+        fprintf(stderr, "[vd_helper] Parent process exited, shutting down\n");
+        shouldExit = 1;
+        break;
+      }
       sig_atomic_t action = pendingMainAction;
       if (action != 0) {
         pendingMainAction = 0;
