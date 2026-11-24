@@ -25,7 +25,6 @@ on run argv
     open
       set current view of container window to icon view
       set theViewOptions to the icon view options of container window
-      set background picture of theViewOptions to file ".background:background.jpg"
       set arrangement of theViewOptions to not arranged
       set icon size of theViewOptions to 128
       set text size of theViewOptions to 16
@@ -40,13 +39,15 @@ on run argv
         set statusbar visible to false
         set toolbar visible to false
         set the bounds to { 400, 100, 900, 465 }
-        set position of item "Sunshine.app" to { 133, 200 }
-        set position of item "Applications" to { 378, 200 }
+        set position of item "Install Lumax.app" to { 250, 200 }
       end tell
       update without registering applications
     close
 
   end tell
+  try
+    do shell script "chflags -h hidden " & quoted form of ("/Volumes/" & image_name & "/Applications")
+  end try
   delay 1
 end tell
 end run

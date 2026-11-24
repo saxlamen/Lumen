@@ -227,11 +227,13 @@ if(APPLE)
 endif()
 
 foreach(file ${INTEGRATION_TEST_FILES})
-    configure_file(
-        "${CMAKE_SOURCE_DIR}/${file}"
-        "${CMAKE_CURRENT_BINARY_DIR}/${file}"
-        COPYONLY
-    )
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${file}")
+        configure_file(
+            "${CMAKE_SOURCE_DIR}/${file}"
+            "${CMAKE_CURRENT_BINARY_DIR}/${file}"
+            COPYONLY
+        )
+    endif()
 endforeach()
 
 # Copy all locale files for locale consistency tests

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="blade1" x1="40" y1="40" x2="216" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="50%" stop-color="#E0F2FE"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </linearGradient>
+    <linearGradient id="blade2" x1="216" y1="40" x2="40" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="50%" stop-color="#FEF9C3"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <radialGradient id="core" cx="128" cy="128" r="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="60%" stop-color="#FEF3C7"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Diagonal X blades -->
+  <path d="M 38 50 L 50 38 L 134 114 L 218 206 L 206 218 L 114 134 Z" fill="url(#blade1)"/>
+  <path d="M 206 38 L 218 50 L 142 134 L 50 218 L 38 206 L 122 114 Z" fill="url(#blade2)"/>
+
+  <!-- 4-point starburst -->
+  <path d="M 128 16 C 134 94 162 122 240 128 C 162 134 134 162 128 240 C 122 162 94 134 16 128 C 94 122 122 94 128 16 Z"
+        fill="#FFFFFF" stroke="#0F172A" stroke-opacity="0.35" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- Luminous core -->
+  <circle cx="128" cy="128" r="22" fill="url(#core)"/>
+</svg>

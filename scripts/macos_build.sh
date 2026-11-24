@@ -25,11 +25,8 @@ export BUILD_VERSION
 export BRANCH
 export COMMIT
 
-# Match the deployment target used by the macOS CI build unless explicitly overridden.
-export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
-
+# boost could be included here but cmake will build the right version we need
 required_formulas=(
-  "boost"
   "cmake"
   "doxygen"
   "graphviz"
@@ -37,7 +34,7 @@ required_formulas=(
   "pkgconf"
   "icu4c@78"
   "miniupnpc"
-  "openssl@4"
+  "openssl@3"
   "opus"
   "llvm"
   "qtbase"
@@ -95,31 +92,51 @@ function run_step_deps() {
 function run_step_cmake() {
   echo "Running step: CMake configure"
 
-  # Static Boost.Locale exposes ICU as transitive linker arguments, while Homebrew keeps ICU keg-only.
-  icu4c_root=$(brew --prefix icu4c@78 2>/dev/null)
-  export CPPFLAGS="${CPPFLAGS:+${CPPFLAGS} }-I${icu4c_root}/include"
-  export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-L${icu4c_root}/lib"
-  export LIBRARY_PATH="${icu4c_root}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
-
   # prepare CMAKE args
   cmake_args=(
-    "-B=build"
-    "-S=."
+    "-B=${build_dir}"
+    "-S=${script_dir}/.."
     "-DBUILD_DOCS=${build_docs}"
     "-DBUILD_TESTS=${build_tests}"
     "-DBUILD_WERROR=ON"
     "-DCMAKE_BUILD_TYPE=${build_type}"
-    "-DICU_ROOT=${icu4c_root}"
-    "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@4 2>/dev/null)"
+    "-DICU_ROOT=$(brew --prefix icu4c@78 2>/dev/null)"
+    "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3 2>/dev/null)"
     "-DOpus_ROOT_DIR=$(brew --prefix opus 2>/dev/null)"
     "-DQt6_DIR=$(brew --prefix qtbase 2>/dev/null)/lib/cmake/Qt6"
     "-DQt6Svg_DIR=$(brew --prefix qtsvg 2>/dev/null)/lib/cmake/Qt6Svg"
     "-DSUNSHINE_ENABLE_TRAY=ON"
   )
 
+  # The frame drain fix lives in a patched FFmpeg, and nothing here fails when it is missing: the
+  # DMG would simply ship the old host latency while still building cleanly. Same selection rule and
+  # the same printed verdict as build.sh, so a bundle build cannot drift from what gets deployed.
+  local ffmpeg_bundle="${LUMEN_FFMPEG_BUNDLE:-$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg}"
+  if [[ "${ffmpeg_bundle}" == "auto" ]]; then
+    echo "==> Building the patched FFmpeg bundle (a few minutes the first time)..."
+    WORK="$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle" bash "${script_dir}/../third-party/ffmpeg-patches/build-bundle.sh"
+    ffmpeg_bundle="$HOME/Scripts/Lumen/deps/lumen-ffmpeg-bundle/bundle/ffmpeg"
+  fi
+  if [[ -f "${ffmpeg_bundle}/lib/libavcodec.a" ]]; then
+    # grep reads a file rather than a pipe: grep -q exits early, which under pipefail would make a
+    # successful match look like a failed pipeline.
+    local drain_symbols
+    drain_symbols="$(mktemp)"
+    strings "${ffmpeg_bundle}/lib/libavcodec.a" > "${drain_symbols}"
+    if grep -q "^frame_drain$" "${drain_symbols}"; then
+      echo "==> FFmpeg: ${ffmpeg_bundle} (frame drain available)"
+    else
+      echo "==> FFmpeg: ${ffmpeg_bundle} (no frame_drain option, host latency stays at the old level)"
+    fi
+    rm -f "${drain_symbols}"
+    cmake_args+=("-DFFMPEG_PREPARED_BINARIES=${ffmpeg_bundle}")
+  else
+    echo "==> FFmpeg: published build-deps archive (no frame drain, host latency stays at the old level)"
+  fi
+
   if [[ -n "${sign_app}" ]]; then
     if [[ -n "${APPLE_CODESIGN_IDENTITY:-}" ]]; then
-      cmake_args+=("-DAPPLE_CODESIGN_IDENTITY='${APPLE_CODESIGN_IDENTITY}'")
+      cmake_args+=("-DAPPLE_CODESIGN_IDENTITY=${APPLE_CODESIGN_IDENTITY}")
     else
       echo "Please set the APPLE_CODESIGN_IDENTITY environment variable or use --skip-codesign"
       exit 1
@@ -128,17 +145,17 @@ function run_step_cmake() {
 
   # Publisher metadata
   if [[ -n "$publisher_name" ]]; then
-    cmake_args+=("-DSUNSHINE_PUBLISHER_NAME='${publisher_name}'")
+    cmake_args+=("-DSUNSHINE_PUBLISHER_NAME=${publisher_name}")
   fi
   if [[ -n "$publisher_website" ]]; then
-    cmake_args+=("-DSUNSHINE_PUBLISHER_WEBSITE='${publisher_website}'")
+    cmake_args+=("-DSUNSHINE_PUBLISHER_WEBSITE=${publisher_website}")
   fi
   if [[ -n "$publisher_issue_url" ]]; then
-    cmake_args+=("-DSUNSHINE_PUBLISHER_ISSUE_URL='${publisher_issue_url}'")
+    cmake_args+=("-DSUNSHINE_PUBLISHER_ISSUE_URL=${publisher_issue_url}")
   fi
 
   # Cmake stuff here
-  mkdir -p "build"
+  mkdir -p "${build_dir}"
   echo "cmake args:"
   echo "${cmake_args[@]}"
   cmake "${cmake_args[@]}"
@@ -164,11 +181,11 @@ function run_step_dmg() {
   cpack -G DragNDrop --config "${build_dir}/CPackConfig.cmake" --verbose
 
   if [[ -n "${sign_app}" && -n "${notarize}" ]]; then
-    time xcrun notarytool submit "${build_dir}/cpack_artifacts/Sunshine.dmg" \
+    time xcrun notarytool submit "${build_dir}/cpack_artifacts/Lumax.dmg" \
       --keychain-profile "notarytool-password" \
       --wait \
       --timeout 15m
-    xcrun stapler staple -v "${build_dir}/cpack_artifacts/Sunshine.dmg"
+    xcrun stapler staple -v "${build_dir}/cpack_artifacts/Lumax.dmg"
   fi
   return 0
 }
@@ -258,7 +275,7 @@ shift $((OPTIND -1))
 
 # get directory of this script
 script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-build_dir="$script_dir/../build"
+build_dir="$script_dir/../cmake-build-macos-app"
 echo "Script Directory: $script_dir"
 echo "Build Directory: $build_dir"
 mkdir -p "$build_dir"

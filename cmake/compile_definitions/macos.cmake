@@ -6,9 +6,10 @@ if (SUNSHINE_BUILD_HOMEBREW)
     set(SUNSHINE_ASSETS_DIR "${CMAKE_INSTALL_PREFIX}/${SUNSHINE_ASSETS_DIR}")
 else()
     # Bundle layout for macOS app builds
-    set(SUNSHINE_ASSETS_DIR "${CMAKE_PROJECT_NAME}.app/Contents/Resources/assets")
+    set(SUNSHINE_ASSETS_DIR ".Lumax/Lumax.app/Contents/Resources/assets")
     set(SUNSHINE_ASSETS_DIR_DEF "../Resources/assets")
 endif()
+set(MACOS_APP_NAME "Lumax")
 
 set(MACOS_LINK_DIRECTORIES
         /opt/homebrew/lib

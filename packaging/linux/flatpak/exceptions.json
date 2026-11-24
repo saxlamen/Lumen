@@ -1,7 +1,0 @@
-{
-  "dev.lizardbyte.app.Sunshine": [
-    "external-gitmodule-url-found",
-    "finish-args-flatpak-spawn-access",
-    "finish-args-home-filesystem-access"
-  ]
-}

@@ -14,12 +14,25 @@ else()
     # Build an .app
     set(CMAKE_MACOSX_BUNDLE YES)
 
-    set(MAC_BUNDLE_NAME "${CMAKE_PROJECT_NAME}.app")
-    set(MAC_BUNDLE_CONTENTS "${MAC_BUNDLE_NAME}/Contents")
+    set(MAC_PAYLOAD_DIR ".Lumax")
+    set(MAC_BUNDLE_NAME "Lumax.app")
+    set(MAC_BUNDLE_PATH "${MAC_PAYLOAD_DIR}/${MAC_BUNDLE_NAME}")
+    set(MAC_BUNDLE_CONTENTS "${MAC_BUNDLE_PATH}/Contents")
     set(MAC_BUNDLE_RESOURCES "${MAC_BUNDLE_CONTENTS}/Resources")
 
-    install(TARGETS sunshine
+    set(INSTALLER_BUNDLE_NAME "Install Lumax.app")
+    set(INSTALLER_BUNDLE_RESOURCES "${INSTALLER_BUNDLE_NAME}/Contents/Resources")
+
+    install(TARGETS install_lumax
         BUNDLE DESTINATION .
+        COMPONENT Runtime)
+
+    install(FILES "${PROJECT_SOURCE_DIR}/src_assets/macos/build/sunshine.icns"
+            DESTINATION "${INSTALLER_BUNDLE_RESOURCES}"
+            COMPONENT Runtime)
+
+    install(TARGETS sunshine
+        BUNDLE DESTINATION "${MAC_PAYLOAD_DIR}"
         COMPONENT Runtime)
 
     if(SUNSHINE_ENABLE_TRAY)
@@ -34,7 +47,7 @@ else()
             OUTPUT_SCRIPT SUNSHINE_QT_DEPLOY_SCRIPT
             CONTENT "
 qt6_deploy_runtime_dependencies(
-    EXECUTABLE \"$<TARGET_FILE_NAME:sunshine>.app\"
+    EXECUTABLE \"${MAC_PAYLOAD_DIR}/$<TARGET_FILE_NAME:sunshine>.app\"
     NO_APP_STORE_COMPLIANCE
     NO_TRANSLATIONS
     DEPLOY_TOOL_OPTIONS -no-codesign
@@ -59,7 +72,8 @@ qt6_deploy_runtime_dependencies(
 
     # Pull in non-system dylibs for a self-contained .app
     install(CODE "
-        set(_app \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_PROJECT_NAME}.app\")
+        set(_app \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${MAC_BUNDLE_PATH}\")
+        set(_installer \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${INSTALLER_BUNDLE_NAME}\")
 
         message(STATUS \"Running fixup_bundle for: \${_app}\")
         include(BundleUtilities)
@@ -80,6 +94,7 @@ qt6_deploy_runtime_dependencies(
 
         # Remove Finder/resource-fork metadata that breaks codesign.
         execute_process(COMMAND /usr/bin/xattr -rc \"\${_app}\")
+        execute_process(COMMAND /usr/bin/xattr -rc \"\${_installer}\")
 
         message(STATUS \"removing any existing signatures\")
         execute_process(COMMAND /usr/bin/codesign
@@ -89,6 +104,14 @@ qt6_deploy_runtime_dependencies(
         )
         if(NOT rc EQUAL 0)
             message(FATAL_ERROR \"codesign failed to remove existing signatures\")
+        endif()
+        execute_process(COMMAND /usr/bin/codesign
+            --remove-signature --force --deep
+            \"\${_installer}\"
+            RESULT_VARIABLE installer_rm_rc
+        )
+        if(NOT installer_rm_rc EQUAL 0)
+            message(FATAL_ERROR \"codesign failed to remove existing installer signatures\")
         endif()
 
         # SHOULD_SIGN is set only when publish_release is true or when manually building
@@ -131,6 +154,16 @@ qt6_deploy_runtime_dependencies(
               message(FATAL_ERROR \"codesign failed while signing .app\")
           endif()
 
+          # Sign the installer app
+          execute_process(COMMAND /usr/bin/codesign --verbose=2
+              --sign \"${APPLE_CODESIGN_IDENTITY}\" \"\${_installer}\"
+              --force --timestamp --options=runtime
+              RESULT_VARIABLE installer_sign_rc
+          )
+          if(NOT installer_sign_rc EQUAL 0)
+              message(FATAL_ERROR \"codesign failed while signing installer .app\")
+          endif()
+
           # Verify
           execute_process(COMMAND /usr/bin/codesign --verify --deep --strict --verbose=2 \"\${_app}\"
               RESULT_VARIABLE rc4
@@ -138,14 +171,21 @@ qt6_deploy_runtime_dependencies(
           if(NOT rc4 EQUAL 0)
               message(FATAL_ERROR \"codesign --verify failed\")
           endif()
+          execute_process(COMMAND /usr/bin/codesign --verify --deep --strict --verbose=2 \"\${_installer}\"
+              RESULT_VARIABLE installer_verify_rc
+          )
+          if(NOT installer_verify_rc EQUAL 0)
+              message(FATAL_ERROR \"codesign --verify failed for installer .app\")
+          endif()
         endif()
     " COMPONENT Runtime)
 
     # DragNDrop
-    set(CPACK_BUNDLE_NAME "${CMAKE_PROJECT_NAME}")
+    set(CPACK_PACKAGE_NAME "Lumax")
+    set(CPACK_PACKAGE_FILE_NAME "Lumax")
+    set(CPACK_BUNDLE_NAME "Lumax")
     set(CPACK_BUNDLE_PLIST "${APPLE_PLIST_FILE}")
     set(CPACK_BUNDLE_ICON "${PROJECT_SOURCE_DIR}/src_assets/macos/build/sunshine.icns")
     set(CPACK_PACKAGING_INSTALL_PREFIX "/")
-    set(CPACK_DMG_BACKGROUND_IMAGE "${PROJECT_SOURCE_DIR}/src_assets/macos/build/sunshine-background-72dpi.jpg")
     set(CPACK_DMG_DS_STORE_SETUP_SCRIPT "${PROJECT_SOURCE_DIR}/src_assets/macos/build/dmg-finder-layout.applescript")
 endif()

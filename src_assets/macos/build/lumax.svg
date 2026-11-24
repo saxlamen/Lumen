@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- macOS Big Sur+ squircle drop shadow -->
+    <filter id="iconShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+
+    <!-- Soft bloom for the central starburst -->
+    <filter id="starGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Deep obsidian-indigo background -->
+    <linearGradient id="bgGrad" x1="160" y1="100" x2="864" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#192138"/>
+      <stop offset="48%" stop-color="#0B1020"/>
+      <stop offset="100%" stop-color="#04060C"/>
+    </linearGradient>
+
+    <!-- Subtle top-left glass rim -->
+    <linearGradient id="rimGrad" x1="100" y1="100" x2="924" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="30%" stop-color="#93C5FD" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <!-- Dual-tone HDR ambient aura -->
+    <radialGradient id="auraWarm" cx="540" cy="490" r="350" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDE68A" stop-opacity="0.42"/>
+      <stop offset="38%" stop-color="#F59E0B" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#0B1020" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="auraCool" cx="484" cy="534" r="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.26"/>
+      <stop offset="45%" stop-color="#0284C7" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0B1020" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- X-beam 1: Cyan -> White -> Amber -->
+    <linearGradient id="bladeCyanAmber" x1="250" y1="250" x2="774" y2="774" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="36%" stop-color="#E0F2FE"/>
+      <stop offset="50%" stop-color="#FFFFFF"/>
+      <stop offset="66%" stop-color="#FDE68A"/>
+      <stop offset="100%" stop-color="#EA580C"/>
+    </linearGradient>
+
+    <!-- X-beam 2: Gold -> White -> Sky Blue -->
+    <linearGradient id="bladeGoldSky" x1="774" y1="250" x2="250" y2="774" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="36%" stop-color="#FEF9C3"/>
+      <stop offset="50%" stop-color="#FFFFFF"/>
+      <stop offset="66%" stop-color="#BAE6FD"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+
+    <!-- Central core gradient -->
+    <radialGradient id="coreOrb" cx="502" cy="500" r="68" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#FEF3C7"/>
+      <stop offset="100%" stop-color="#FBBF24"/>
+    </radialGradient>
+
+    <clipPath id="squircleClip">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+  </defs>
+
+  <!-- Base macOS squircle -->
+  <g filter="url(#iconShadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bgGrad)"/>
+  </g>
+
+  <g clip-path="url(#squircleClip)">
+    <!-- Ambient HDR glow layers -->
+    <circle cx="484" cy="534" r="380" fill="url(#auraCool)"/>
+    <circle cx="540" cy="490" r="350" fill="url(#auraWarm)"/>
+
+    <!-- Subtle optical lens ring -->
+    <circle cx="512" cy="512" r="248" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2"/>
+    <circle cx="512" cy="512" r="172" fill="none" stroke="#FDE68A" stroke-opacity="0.08" stroke-width="2"/>
+
+    <!-- Inner glass rim -->
+    <rect x="102" y="102" width="820" height="820" rx="183" ry="183"
+          fill="none" stroke="url(#rimGrad)" stroke-width="4"/>
+
+    <!-- Tapered diagonal X light blades -->
+    <path d="M 244 268 Q 256 256 268 244 L 528 476 L 780 756 Q 768 768 756 780 L 476 528 Z"
+          fill="url(#bladeCyanAmber)" opacity="0.95"/>
+    <path d="M 756 244 Q 768 256 780 268 L 548 528 L 268 780 Q 256 768 244 756 L 496 476 Z"
+          fill="url(#bladeGoldSky)" opacity="0.95"/>
+
+    <!-- Outer soft 4-point starburst halo -->
+    <path d="M 512 182 C 528 414 610 496 842 512 C 610 528 528 610 512 842 C 496 610 414 528 182 512 C 414 496 496 414 512 182 Z"
+          fill="#FFFFFF" opacity="0.22" filter="url(#starGlow)"/>
+
+    <!-- Crisp main 4-point HDR starburst -->
+    <path d="M 512 204 C 526 420 604 498 820 512 C 604 526 526 604 512 820 C 498 604 420 526 204 512 C 420 498 498 420 512 204 Z"
+          fill="#FFFFFF"/>
+
+    <!-- Luminous golden-white core -->
+    <circle cx="512" cy="512" r="54" fill="url(#coreOrb)"/>
+    <circle cx="512" cy="512" r="24" fill="#FFFFFF"/>
+  </g>
+</svg>
