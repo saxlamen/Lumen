@@ -45,9 +45,17 @@ if [ "$SESSION" != "Aqua" ]; then
 fi
 echo "✅ session：$SESSION"
 
-# 2) 公證需要 Developer ID（Apple Development / Apple Distribution 都不行）
+# 2) 簽名憑證：若本機有 Development profile（含 Virtual HID），自動選用 Apple Development；否則使用 Developer ID（可公證）
+PROFILE_FILE="$REPO/src_assets/macos/Lumax.provisionprofile"
 if [ -n "$SIGN" ]; then
   # 要的是引號裡的憑證名稱。find-identity 的第 2 欄是 SHA-1，拿去 --sign 只會得到一個看不見的身分。
+  if [ -z "$IDENTITY" ] && [ -f "$PROFILE_FILE" ] && grep -q "ProvisionedDevices" "$PROFILE_FILE" 2>/dev/null; then
+    IDENTITY="$(security find-identity -p codesigning -v 2>/dev/null \
+      | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)"
+    if [ -n "$IDENTITY" ]; then
+      echo "ℹ️  偵測到本機 Development profile（Lumax.provisionprofile），改用 Apple Development 憑證以啟用 Virtual HID"
+    fi
+  fi
   if [ -z "$IDENTITY" ]; then
     IDENTITY="$(security find-identity -p codesigning -v 2>/dev/null \
       | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)"
@@ -65,9 +73,11 @@ if [ -n "$SIGN" ]; then
   fi
   TEAM="${IDENTITY##*(}"; TEAM="${TEAM%%)}"
   echo "✅ 簽名身分：${IDENTITY}"
-  # 別去猜 notarytool 把設定檔存成哪個鑰匙圈項目，那是實作細節、查錯會誤報沒有；
-  # 直接叫 notarytool 用這個 profile 打一次 API，能不能用由它說。
-  if xcrun notarytool history --keychain-profile notarytool-password >/dev/null 2>&1; then
+  # 只有 Developer ID Application 才能送 Apple 公證；Apple Development 跳過公證。
+  if [[ "$IDENTITY" != Developer\ ID\ Application:* ]]; then
+    NOTARIZE=""
+    echo "ℹ️  Apple Development 憑證不送 Apple 公證，僅做本機簽名。"
+  elif xcrun notarytool history --keychain-profile notarytool-password >/dev/null 2>&1; then
     NOTARIZE="yes"
     echo "✅ 公證设定檔：notarytool-password（team ${TEAM}）"
   else
