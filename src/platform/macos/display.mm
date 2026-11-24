@@ -17,6 +17,7 @@
 // local includes
 #include "src/config.h"
 #include "src/display_device.h"
+#include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/macos/av_img_t.h"
@@ -248,6 +249,10 @@ namespace platf {
         }
         dispatch_retain(frame_signal);
         return true;
+      }
+
+      void set_shows_cursor(bool shows_cursor) override {
+        [capture updateShowsCursor:shows_cursor ? YES : NO];
       }
 
       void wait_frame(std::chrono::nanoseconds timeout) override {
@@ -493,7 +498,7 @@ namespace platf {
       sc_frame_source_t source {sc_capture};
       auto &policy = sckit::backend_policy();
 
-      const auto status = sckit::run_capture_loop(source, policy, push_captured_image_cb, pull_free_image_cb, process_frame, SCKIT_FRAME_POLL_INTERVAL);
+      const auto status = sckit::run_capture_loop(source, policy, push_captured_image_cb, pull_free_image_cb, process_frame, SCKIT_FRAME_POLL_INTERVAL, cursor);
       if (status == capture_e::reinit) {
         if (policy.stream_start_failed()) {
           BOOST_LOG(warning) << "SCCapture stream could not be started; reinitializing capture on AVFoundation"sv;
@@ -631,6 +636,7 @@ namespace platf {
           display->width = display->sc_capture.frameWidth;
           display->height = display->sc_capture.frameHeight;
           display_helpers::init_display_geometry(*display, display_id);
+          display->sc_capture.showsCursor = display_cursor ? YES : NO;
 
           const auto requested_range = macos_hdr::dynamic_range_from_view(config::video.vt.capture_dynamic_range_macos);
           const double edr_headroom = screen_edr_headroom(display_id);

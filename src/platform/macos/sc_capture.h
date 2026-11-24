@@ -54,6 +54,10 @@ API_AVAILABLE(macos(14.0))
  * @brief Capture dynamic range mode (0 = SDR, 1 = HDR local, 2 = HDR canonical).
  */
 @property (nonatomic, assign) int captureDynamicRange;
+/**
+ * @brief Whether the mouse cursor is included in captured frames.
+ */
+@property (nonatomic, assign) BOOL showsCursor;
 
 /**
  * @brief Content filter selecting the captured display.
@@ -130,6 +134,12 @@ API_AVAILABLE(macos(14.0))
  * @param frameHeight Output frame height in pixels.
  */
 - (void)setFrameWidth:(int)frameWidth frameHeight:(int)frameHeight;
+/**
+ * @brief Update whether the mouse cursor is shown in the active capture stream.
+ *
+ * @param showsCursor YES to include the cursor, NO to hide it.
+ */
+- (void)updateShowsCursor:(BOOL)showsCursor;
 /**
  * @brief Create, configure, and start the capture stream.
  *
