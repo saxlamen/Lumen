@@ -769,6 +769,26 @@ TEST_F(KeyboardPassthroughTest, DoesNotInjectSyntheticAltWhenAltIsRemappedToMeta
   );
 }
 
+TEST_F(KeyboardPassthroughTest, DoesNotSwallowNWhenShortcutModifiersAreStale) {
+  constexpr auto kAllShortcutModifiers = MODIFIER_SHIFT | MODIFIER_CTRL | MODIFIER_ALT;
+
+  // Hold all three shortcut modifiers; pressing 'n' with all three active triggers the shortcut.
+  press(VKEY_LCONTROL, MODIFIER_CTRL);
+  press(VKEY_LMENU, MODIFIER_CTRL | MODIFIER_ALT);
+  press(VKEY_LSHIFT, kAllShortcutModifiers);
+  static_cast<void>(taken());
+
+  press(0x4E, kAllShortcutModifiers);
+  release(0x4E, kAllShortcutModifiers);
+  EXPECT_TRUE(taken().empty());
+
+  // Simulate a missed modifier-release packet: shortcutFlags still thinks all three are held,
+  // but the subsequent 'n' packet reports modifiers == 0, so 'n' must pass through normally.
+  press(0x4E, 0);
+  release(0x4E, 0);
+  EXPECT_EQ(taken(), (std::vector<std::string> {pressed(0x4E), released(0x4E)}));
+}
+
 TEST_F(KeyboardPassthroughTest, DoesNotInjectSyntheticAltWhenRightAltIsRemappedToMeta) {
   config::input.keybindings = {{VKEY_RMENU, VKEY_RWIN}};
 

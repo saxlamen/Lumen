@@ -1294,8 +1294,13 @@ namespace input {
     if (!state.pressed) {
       if (!release) {
         // A new key has been pressed down, we need to check for key combo's
-        // If a key-combo has been pressed down, don't pass it through
-        if (input->shortcutFlags == input_t::SHORTCUT && apply_shortcut(keyCode) > 0) {
+        // If a key-combo has been pressed down, don't pass it through.
+        // Also require the packet's modifier bitmask to agree so a missed
+        // modifier-release packet cannot leave shortcutFlags stuck swallowing 'n'.
+        constexpr auto kShortcutModifiers = MODIFIER_SHIFT | MODIFIER_CTRL | MODIFIER_ALT;
+        if (input->shortcutFlags == input_t::SHORTCUT &&
+            (modifiers & kShortcutModifiers) == kShortcutModifiers &&
+            apply_shortcut(keyCode) > 0) {
           return;
         }
 
