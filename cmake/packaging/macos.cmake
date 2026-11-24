@@ -163,7 +163,7 @@ qt6_deploy_runtime_dependencies(
           set(_hid_entitlements \"${SUNSHINE_SOURCE_ASSETS_DIR}/macos/entitlements.hid.plist\")
           if(EXISTS \"\${_profile_src}\" AND EXISTS \"\${_hid_entitlements}\")
               file(READ \"\${_profile_src}\" _profile_bytes HEX)
-              # 50726f766973696f6e656444657669636573 == "ProvisionedDevices" (present in Development profiles, absent in Developer ID)
+              # 50726f766973696f6e656444657669636573 == ProvisionedDevices (present in Development profiles, absent in Developer ID)
               string(FIND \"\${_profile_bytes}\" \"50726f766973696f6e656444657669636573\" _is_dev_profile)
               set(_id_str \"${APPLE_CODESIGN_IDENTITY}\")
               if((NOT _is_dev_profile EQUAL -1 AND _id_str MATCHES \"Apple Development\") OR
