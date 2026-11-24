@@ -50,20 +50,12 @@ namespace platf {
     return caps;
   }
 
-  std::vector<supported_gamepad_t> &supported_gamepads(input_t *input) {
-    static std::vector<supported_gamepad_t> gamepads;
-    if (!input || !input->get()) {
-      gamepads = virtualhid::static_supported_gamepads();
-      return gamepads;
-    }
-
-    if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_NONE) {
-      gamepads.clear();
-      return gamepads;
-    }
-
-    const auto licensed = lvh::get_license_status().license.licensed();
-    gamepads = virtualhid::supported_gamepads(virtualhid::get_input_context(*input).runtime.get(), false, licensed, true);
+  std::vector<supported_gamepad_t> &supported_gamepads(input_t * /*input*/) {
+    // macOS provides a native HID / keyboard-mouse controller without requiring a paid Virtual HID Broker license.
+    static std::vector<supported_gamepad_t> gamepads {
+      {"auto", true, ""},
+      {"x360", true, ""},
+    };
     return gamepads;
   }
 

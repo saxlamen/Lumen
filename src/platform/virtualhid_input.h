@@ -18,6 +18,12 @@
 // local includes
 #include "src/platform/common.h"
 
+#ifdef __APPLE__
+namespace platf::macos {
+  class gamepad_device_t;
+}
+#endif
+
 namespace platf::virtualhid {
 
   /**
@@ -67,6 +73,9 @@ namespace platf::virtualhid {
     lvh::PointerViewport mouse_desktop;  ///< Virtual-desktop bounds used to create the shared mouse.
     lvh::PointerViewport mouse_viewport;  ///< Streamed display bounds used to create the shared mouse.
     std::vector<std::shared_ptr<struct gamepad_context_t>> gamepads {static_cast<std::size_t>(MAX_GAMEPADS)};  ///< Virtual gamepad slots.
+#ifdef __APPLE__
+    std::vector<std::shared_ptr<macos::gamepad_device_t>> macos_gamepads {static_cast<std::size_t>(MAX_GAMEPADS)};  ///< Native macOS controllers and keyboard/mouse fallback devices.
+#endif
   };
 
   /**
