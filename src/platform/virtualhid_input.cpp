@@ -26,6 +26,7 @@
 #include "src/logging.h"
 #include "virtualhid_input.h"
 #ifdef __APPLE__
+  #include <ApplicationServices/ApplicationServices.h>
   #include "src/platform/macos/smooth_scroll.h"
 #endif
 
@@ -1171,6 +1172,28 @@ namespace platf {
   }
 
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input) {
+#ifdef __APPLE__
+    // libvirtualhid caches CGMainDisplayID() inside its runtime SharedState.
+    // When a virtual display becomes the main display for a session, refresh
+    // the runtime so mouse/pointer bounds target the new main display.
+    const auto vd_id = platf::virtual_display_get_id();
+    const bool no_active_gamepads = std::none_of(
+      input->virtualhid.gamepads.begin(),
+      input->virtualhid.gamepads.end(),
+      [](const auto &slot) { return slot != nullptr; }
+    );
+    if (vd_id != 0 && no_active_gamepads) {
+      BOOST_LOG(info) << "Refreshing libvirtualhid runtime for virtual display "sv << vd_id
+                      << " (CGMainDisplayID="sv << CGMainDisplayID() << ")"sv;
+      input->virtualhid.mouse.reset();
+      input->virtualhid.keyboard.reset();
+      input->virtualhid.runtime = virtualhid::create_runtime(lvh::BackendKind::platform_default);
+      if (input->virtualhid.runtime) {
+        input->virtualhid.refresh_keyboard();
+        input->virtualhid.refresh_mouse();
+      }
+    }
+#endif
     return std::make_unique<client_input_raw_t>(input);
   }
 
