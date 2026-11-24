@@ -235,9 +235,9 @@ dim "如果面板里连 Sunshine 都看不到：它被记成「已拒绝」了�
 dim "比如引导实例跑到一半没结束）。已拒绝的状态 macOS 不再弹窗、清单也不列出来，要这样清："
 echo
 echo "       1. 菜单栏 Sunshine 图标 → Quit"
-echo "       2. tccutil reset All dev.lizardbyte.app.Sunshine"
+echo "       2. tccutil reset All cc.saxcave.lumax"
 dim "          （只想清一项就换服务名：ScreenCapture / Accessibility / ListenEvent /"
-dim "            SystemPolicyAllFiles，例如 tccutil reset Accessibility dev.lizardbyte.app.Sunshine）"
+dim "            SystemPolicyAllFiles，例如 tccutil reset Accessibility cc.saxcave.lumax）"
 echo "       3. 到「应用程序」双击 Sunshine —— 它会重新提出要求，这时弹窗才会出现 → 按【允许】"
 dim "          （屏幕录制也可以在面板里按左下角「+」手动选 Sunshine.app）"
 echo "       4. 再跑本工具"

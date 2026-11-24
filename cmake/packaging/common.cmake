@@ -31,8 +31,13 @@ endforeach()
 
 # Copy the primary application icon into the built web assets for the system tray.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/assets/web/images")
+if(APPLE)
+    set(_tray_icon_src "${CMAKE_SOURCE_DIR}/src_assets/macos/build/lumax-tray.svg")
+else()
+    set(_tray_icon_src "${CMAKE_SOURCE_DIR}/sunshine.svg")
+endif()
 configure_file(
-        "${CMAKE_SOURCE_DIR}/sunshine.svg"
+        "${_tray_icon_src}"
         "${CMAKE_CURRENT_BINARY_DIR}/assets/web/images/logo-sunshine.svg"
         COPYONLY)
 

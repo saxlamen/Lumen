@@ -1,29 +1,43 @@
 #!/usr/bin/env bash
 ## @file build.sh
-## @brief Build and deploy Lumen with the macOS system tray enabled by default.
-## @details Initialize macOS application dependencies without recursive documentation,
-## test, or FFmpeg source downloads. This script builds with documentation and tests disabled.
-## The FFmpeg dependency is chosen explicitly: the frame drain latency fix lives in a patched
+## @brief Build and package/deploy Lumen on macOS (DMG or Homebrew).
+## @details Supports two distribution targets:
+## - `--dmg`: Build and package a macOS `.app` / `.dmg` via `tools/macos-dmg/lumen-dmg.command`.
+## - `--homebrew`: Build with the macOS system tray enabled and deploy to the Homebrew `lumen` prefix.
+##
+## In `--homebrew` mode, FFmpeg is chosen explicitly: the frame drain latency fix lives in a patched
 ## FFmpeg, so silently linking the published dependency archive would undo it. Set
 ## LUMEN_FFMPEG_BUNDLE to a bundle directory, or to "auto" to build one, see
 ## third-party/ffmpeg-patches/README.md.
 ##
 ## @par Usage
-## `./build.sh [--no-bump|-n] [--help|-h]`. By default each run increments the patch part of
-## LUMEN_VERSION and writes it back, which is what a deployed build should do. `--no-bump` builds at
-## the version already recorded without touching the file, so experiment and measurement builds stay
-## in step with what is committed. Environment knobs: BUILD_DIR, LUMEN_FFMPEG_BUNDLE,
-## APPLE_CODESIGN_IDENTITY.
+## `./build.sh [--dmg|--homebrew] [--no-bump|-n] [--full] [--unsigned] [--help|-h]`
+## By default each run increments the patch part of LUMEN_VERSION and writes it back. `--no-bump`
+## builds at the version already recorded without touching the file. `--full` and `--unsigned`
+## are forwarded to `lumen-dmg.command` in `--dmg` mode. If neither `--dmg` nor `--homebrew` is
+## given in an interactive terminal, the script prompts you to choose.
+## Environment knobs: BUILD_DIR, LUMEN_FFMPEG_BUNDLE, APPLE_CODESIGN_IDENTITY.
 set -euo pipefail
 
+mode=""
 version_bump=true
+dmg_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --dmg)
+      mode="dmg"
+      ;;
+    --homebrew | --brew)
+      mode="homebrew"
+      ;;
+    --full | --unsigned)
+      dmg_args+=("$1")
+      ;;
     -n | --no-bump)
       version_bump=false
       ;;
     -h | --help)
-      sed -n '2,16p' "$0" | sed 's/^## \{0,1\}//'
+      sed -n '2,19p' "$0" | sed 's/^## \{0,1\}//'
       exit 0
       ;;
     *)
@@ -34,11 +48,139 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+find_installed_apps() {
+  local candidate
+  for candidate in \
+    "/Applications/Sunshine.app" \
+    "/Applications/Lumen.app" \
+    "/Applications/Lumax.app" \
+    "$HOME/Applications/Sunshine.app" \
+    "$HOME/Applications/Lumen.app" \
+    "$HOME/Applications/Lumax.app"; do
+    if [[ -d "$candidate" ]]; then
+      echo "$candidate"
+    fi
+  done
+}
+
+if [[ -z "$mode" ]]; then
+  if [[ -t 0 ]]; then
+    brew_status="not installed"
+    if brew list --formula lumen >/dev/null 2>&1; then
+      brew_status="installed ($(brew --prefix lumen))"
+    fi
+    app_list="$(find_installed_apps | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+    app_status="${app_list:-not installed}"
+
+    echo "Current installations:"
+    echo "  - Homebrew lumen: $brew_status"
+    echo "  - Applications:   $app_status"
+    echo ""
+    echo "Select build target:"
+    echo "  1) DMG (.app / .dmg via tools/macos-dmg/lumen-dmg.command)"
+    echo "  2) Homebrew (deploy to brew prefix & restart service)"
+    read -r -p "Choice [1/2]: " choice
+    case "$choice" in
+      1 | dmg)
+        mode="dmg"
+        ;;
+      2 | homebrew | brew)
+        mode="homebrew"
+        ;;
+      *)
+        echo "Invalid choice: $choice" >&2
+        exit 2
+        ;;
+    esac
+  else
+    echo "Missing build mode: specify --dmg or --homebrew (try --help)" >&2
+    exit 2
+  fi
+fi
+
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="${BUILD_DIR:-cmake-build-macos}"
-LUMEN_BIN="$(brew --prefix lumen)/bin/lumen"
+LUMEN_VERSION_FILE="$REPO_DIR/LUMEN_VERSION"
 
 cd "$REPO_DIR"
+
+compute_next_version() {
+  local current_ver=""
+  if [[ -f "$LUMEN_VERSION_FILE" ]]; then
+    current_ver="$(tr -d '[:space:]' < "$LUMEN_VERSION_FILE")"
+  fi
+  if [[ "$version_bump" == false && "$current_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$current_ver"
+  elif [[ "$current_ver" == "0.9.9" ]]; then
+    echo "1.0.0"
+  elif [[ "$current_ver" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+  else
+    echo "1.0.0"
+  fi
+}
+
+NEXT_LUMEN_VER="$(compute_next_version)"
+
+if [[ "$mode" == "dmg" ]]; then
+  if brew list --formula lumen >/dev/null 2>&1; then
+    echo "Warning: Homebrew formula 'lumen' is currently installed ($(brew --prefix lumen))."
+    echo "         Running both Homebrew lumen and the DMG .app can conflict."
+    if [[ -t 0 ]]; then
+      read -r -p "Stop and uninstall Homebrew 'lumen' now? [y/N]: " remove_brew
+      if [[ "$remove_brew" =~ ^[Yy]$ ]]; then
+        brew services stop lumen 2>/dev/null || true
+        brew uninstall lumen
+      fi
+    fi
+  fi
+  while IFS= read -r app_path; do
+    echo "Note: Existing app bundle found at $app_path (replace it after opening the new DMG)."
+  done < <(find_installed_apps)
+
+  prev_ver=""
+  had_version_file=false
+  if [[ -f "$LUMEN_VERSION_FILE" ]]; then
+    had_version_file=true
+    prev_ver="$(cat "$LUMEN_VERSION_FILE")"
+  fi
+  if [[ "$version_bump" == true ]]; then
+    echo "$NEXT_LUMEN_VER" > "$LUMEN_VERSION_FILE"
+  fi
+  if ! bash "$REPO_DIR/tools/macos-dmg/lumen-dmg.command" ${dmg_args[@]+"${dmg_args[@]}"}; then
+    if [[ "$version_bump" == true ]]; then
+      if [[ "$had_version_file" == true ]]; then
+        printf '%s' "$prev_ver" > "$LUMEN_VERSION_FILE"
+      else
+        rm -f "$LUMEN_VERSION_FILE"
+      fi
+    fi
+    exit 1
+  fi
+  if [[ "$version_bump" == false ]]; then
+    echo "==> LUMEN_VERSION left at $NEXT_LUMEN_VER, not incremented."
+  fi
+  exit 0
+fi
+
+BUILD_DIR="${BUILD_DIR:-cmake-build-macos}"
+while IFS= read -r app_path; do
+  echo "Warning: Existing app bundle found at $app_path."
+  echo "         Using both the .app bundle and Homebrew 'lumen' can conflict."
+  if [[ -t 0 ]]; then
+    read -r -p "Remove $app_path now? [y/N]: " remove_app
+    if [[ "$remove_app" =~ ^[Yy]$ ]]; then
+      rm -rf "$app_path"
+      echo "==> Removed $app_path"
+    fi
+  fi
+done < <(find_installed_apps)
+
+if ! brew list --formula lumen >/dev/null 2>&1; then
+  echo "==> Homebrew formula 'lumen' is not installed, installing saxlamen/lumen-local/lumen..."
+  brew install saxlamen/lumen-local/lumen
+fi
+LUMEN_PREFIX="$(brew --prefix lumen)"
+LUMEN_BIN="$LUMEN_PREFIX/bin/lumen"
 
 bash "$REPO_DIR/scripts/configure-prebuilt-ffmpeg.sh"
 # @brief Fetch application libraries only; their standalone docs/tests are not built here.
@@ -112,21 +254,6 @@ if [[ "$need_configure" == true ]]; then
     ${FFMPEG_CMAKE_ARGS[@]+"${FFMPEG_CMAKE_ARGS[@]}"}
 fi
 
-LUMEN_VERSION_FILE="$REPO_DIR/LUMEN_VERSION"
-if [[ -f "$LUMEN_VERSION_FILE" ]]; then
-  CURRENT_LUMEN_VER="$(tr -d '[:space:]' < "$LUMEN_VERSION_FILE")"
-  if [[ "$version_bump" == false && "$CURRENT_LUMEN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    NEXT_LUMEN_VER="$CURRENT_LUMEN_VER"
-  elif [[ "$CURRENT_LUMEN_VER" == "0.9.9" ]]; then
-    NEXT_LUMEN_VER="1.0.0"
-  elif [[ "$CURRENT_LUMEN_VER" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    NEXT_LUMEN_VER="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
-  else
-    NEXT_LUMEN_VER="1.0.0"
-  fi
-else
-  NEXT_LUMEN_VER="1.0.0"
-fi
 echo "==> Lumen version: $NEXT_LUMEN_VER (base Sunshine: $REBASE_VERSION)"
 
 cat > "$BUILD_DIR/lumen_version.h" <<EOF
@@ -150,6 +277,11 @@ echo "==> Performing incremental compile..."
 cmake --build "$BUILD_DIR" --target lumen -j"$(sysctl -n hw.ncpu)"
 
 echo "==> Deploying binary to $LUMEN_BIN..."
+if [[ ! -d "$LUMEN_PREFIX/bin" ]]; then
+  echo "Error: Homebrew formula 'lumen' is not installed ($LUMEN_PREFIX/bin not found)." >&2
+  echo "Install it first (e.g. 'brew install saxlamen/lumen-local/lumen') or use './build.sh --dmg'." >&2
+  exit 1
+fi
 brew services stop lumen 2>/dev/null || true
 install -m 755 "$BUILD_DIR/lumen" "$LUMEN_BIN"
 

@@ -18,7 +18,7 @@ set -uo pipefail
 
 REPO="$HOME/Scripts/Lumen"
 BUILD_DIR="$REPO/cmake-build-macos-app"
-DMG="$BUILD_DIR/cpack_artifacts/Sunshine.dmg"
+DMG="$BUILD_DIR/cpack_artifacts/Lumax.dmg"
 IDENTITY="${APPLE_CODESIGN_IDENTITY:-}"
 STEP="dmg"
 SIGN="yes"
@@ -115,13 +115,13 @@ if [ ! -f "$DMG" ]; then
   echo "❌ 找不到 $DMG"
   exit 1
 fi
-APP="$BUILD_DIR/cpack_artifacts/_CPack_Packages/Darwin/DragNDrop/Sunshine/ALL_IN_ONE/Sunshine.app"
-OUT="$HOME/Desktop/Lumen-$VERSION-$(uname -m).dmg"
+APP="$BUILD_DIR/cpack_artifacts/_CPack_Packages/Darwin/DragNDrop/Lumax/ALL_IN_ONE/.Lumax/Lumax.app"
+OUT="$HOME/Desktop/Lumax-$VERSION-$(uname -m).dmg"
 cp -f "$DMG" "$OUT"
 
 echo "── 產物 ─────────────────────────────"
 ls -lh "$OUT" | awk '{print $5, $NF}'
-echo "frame_drain（patched FFmpeg 有沒有進去）：$(strings "$APP/Contents/MacOS/Sunshine" 2>/dev/null | grep -c '^frame_drain$') （要 ≥1）"
+echo "frame_drain（patched FFmpeg 有沒有進去）：$(strings "$APP/Contents/MacOS/Lumax" 2>/dev/null | grep -c '^frame_drain$') （要 ≥1）"
 if [ -n "$SIGN" ]; then
   echo "── codesign ─────────────────────────"
   codesign -dvv "$APP" 2>&1 | grep -E "^(Identifier|Authority|TeamIdentifier|Runtime)" | sed 's/^/  /'

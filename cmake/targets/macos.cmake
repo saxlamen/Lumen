@@ -5,8 +5,8 @@ if (SUNSHINE_BUILD_HOMEBREW)
 else()
     # .app build
     set_target_properties(lumen PROPERTIES
-            OUTPUT_NAME "${CMAKE_PROJECT_NAME}"
-            MACOSX_BUNDLE_BUNDLE_NAME "${CMAKE_PROJECT_NAME}"
+            OUTPUT_NAME "Lumax"
+            MACOSX_BUNDLE_BUNDLE_NAME "Lumax"
             MACOSX_BUNDLE_GUI_IDENTIFIER "${PROJECT_FQDN}"
             MACOSX_BUNDLE_INFO_PLIST "${APPLE_PLIST_FILE}"
             MACOSX_BUNDLE_ICON_FILE "sunshine.icns"
@@ -42,4 +42,24 @@ if (NOT SUNSHINE_BUILD_HOMEBREW)
                     "$<TARGET_FILE:vd_helper>" "$<TARGET_FILE_DIR:lumen>/vd_helper"
             COMMENT "Copying virtual display helper into the app bundle"
             VERBATIM)
+
+    # Native DMG installer app ("Install Lumax.app")
+    set(INSTALLER_PLIST_FILE "${CMAKE_BINARY_DIR}/InstallLumax.Info.plist")
+    configure_file(
+            "${PROJECT_SOURCE_DIR}/src_assets/macos/installer/Info.plist.in"
+            "${INSTALLER_PLIST_FILE}"
+            @ONLY)
+    add_executable(install_lumax MACOSX_BUNDLE
+            "${PROJECT_SOURCE_DIR}/src_assets/macos/installer/install_lumax.mm")
+    set_target_properties(install_lumax PROPERTIES
+            OUTPUT_NAME "Install ${MACOS_APP_NAME}"
+            MACOSX_BUNDLE_BUNDLE_NAME "Install ${MACOS_APP_NAME}"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "${PROJECT_FQDN}.installer"
+            MACOSX_BUNDLE_INFO_PLIST "${INSTALLER_PLIST_FILE}"
+            MACOSX_BUNDLE_ICON_FILE "sunshine.icns"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
+    target_compile_definitions(install_lumax PRIVATE PROJECT_FQDN="${PROJECT_FQDN}")
+    target_compile_options(install_lumax PRIVATE -fobjc-arc)
+    target_link_libraries(install_lumax PRIVATE "-framework Cocoa")
 endif()

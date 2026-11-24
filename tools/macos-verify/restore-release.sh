@@ -39,5 +39,5 @@ open -n "$APP"; sleep 9
 P=$(pgrep -x Sunshine | head -1)
 echo "  啟動: pid=${P:-失敗}  端口=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk '$9 ~ /47984|47989|48010/ {print $2}' | sort -u | tr '\n' ' ')"
 [ -n "${P:-}" ] && echo "  狀態項目: $(osascript -e "tell application \"System Events\" to tell (first process whose unix id is $P) to return count of menu bar items of menu bar 2" 2>&1 | head -1)"
-echo "  權限: $(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select service || '=' || auth_value from access where client='dev.lizardbyte.app.Sunshine';" 2>/dev/null | tr '\n' ' ')"
+echo "  權限: $(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select service || '=' || auth_value from access where client='cc.saxcave.lumax';" 2>/dev/null | tr '\n' ' ')"
 echo "  登入項目: $(osascript -e 'tell application "System Events" to get the name of every login item' 2>&1 | tr ',' '\n' | sed 's/^ *//' | tr '\n' ' ')"

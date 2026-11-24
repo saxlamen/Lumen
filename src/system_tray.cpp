@@ -416,6 +416,12 @@ namespace system_tray {
   static struct tray tray = {
     .icon = TRAY_ICON,
     .tooltip = PROJECT_NAME,
+  #ifdef __APPLE__
+    // On macOS, NSStatusItem automatically opens the attached NSMenu on left-click.
+    // A no-op callback prevents QtTrayMenu::onTrayActivated() from calling showMenu()
+    // and popping up a second QMenu over the native menu.
+    .cb = [](struct tray *) {},
+  #endif
     .menu =
       (struct tray_menu[]) {
         // Tray menu labels currently use the project's English source strings.

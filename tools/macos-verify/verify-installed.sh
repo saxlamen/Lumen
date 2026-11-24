@@ -39,7 +39,7 @@ if [ -n "${DMG:-}" ]; then
 fi
 
 echo "=== 換檔之後的權限與執行狀態 ==="
-echo "  TCC: $(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select service || '=' || auth_value from access where client='dev.lizardbyte.app.Sunshine';" 2>/dev/null | tr '\n' ' ')"
+echo "  TCC: $(sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select service || '=' || auth_value from access where client='cc.saxcave.lumax';" 2>/dev/null | tr '\n' ' ')"
 P=$(pgrep -x Sunshine | head -1)
 echo "  進程: ${P:-沒在跑}   起動時刻: $(ps -o lstart= -p "${P:-0}" 2>/dev/null | xargs echo)"
 echo "  端口: $(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk '$9 ~ /47984|47989|48010/ {print $2"/"$9}' | sort -u | tr '\n' ' ')"

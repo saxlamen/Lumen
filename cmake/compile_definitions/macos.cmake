@@ -4,7 +4,7 @@ add_compile_definitions(SUNSHINE_PLATFORM="macos")
 
 if (NOT SUNSHINE_BUILD_HOMEBREW)
     # Bundle layout for macOS app builds
-    set(SUNSHINE_ASSETS_DIR "${CMAKE_PROJECT_NAME}.app/Contents/Resources/assets")
+    set(SUNSHINE_ASSETS_DIR ".Lumax/Lumax.app/Contents/Resources/assets")
     set(SUNSHINE_ASSETS_DIR_DEF "../Resources/assets")
 endif()
 
@@ -41,6 +41,7 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         ${VIDEO_TOOLBOX_LIBRARY}
         ${SCREEN_CAPTURE_KIT_LIBRARY})
 
+set(MACOS_APP_NAME "Lumax")
 set(APPLE_PLIST_TEMPLATE "${SUNSHINE_SOURCE_ASSETS_DIR}/macos/build/Info.plist.in")
 set(APPLE_PLIST_FILE "${CMAKE_BINARY_DIR}/Info.plist")
 set(APPLE_ENTITLEMENTS_FILE "${SUNSHINE_SOURCE_ASSETS_DIR}/macos/entitlements.plist")

@@ -181,11 +181,11 @@ function run_step_dmg() {
   cpack -G DragNDrop --config "${build_dir}/CPackConfig.cmake" --verbose
 
   if [[ -n "${sign_app}" && -n "${notarize}" ]]; then
-    time xcrun notarytool submit "${build_dir}/cpack_artifacts/Sunshine.dmg" \
+    time xcrun notarytool submit "${build_dir}/cpack_artifacts/Lumax.dmg" \
       --keychain-profile "notarytool-password" \
       --wait \
       --timeout 15m
-    xcrun stapler staple -v "${build_dir}/cpack_artifacts/Sunshine.dmg"
+    xcrun stapler staple -v "${build_dir}/cpack_artifacts/Lumax.dmg"
   fi
   return 0
 }

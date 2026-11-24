@@ -33,7 +33,7 @@ P=$(pgrep -f "$APP" | head -1)
 echo "  啟動 pid=$P tray=$(tray_count "$P")"
 
 echo "=== 送出「退出並重新打開」等效的 Apple event (kAEQuitApplication) ==="
-osascript -e 'tell application id "dev.lizardbyte.app.Sunshine" to quit' 2>&1 | head -1 | sed 's/^/  osascript: /'
+osascript -e 'tell application id "cc.saxcave.lumax" to quit' 2>&1 | head -1 | sed 's/^/  osascript: /'
 
 for i in $(seq 1 12); do
   A=$(alive)

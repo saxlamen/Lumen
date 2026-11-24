@@ -121,6 +121,12 @@ namespace {
   void verify_menu() {
     const auto &tray_data = system_tray::tray_data_for_testing();
     ASSERT_NE(tray_data.menu, nullptr);
+  #ifdef __APPLE__
+    EXPECT_NE(tray_data.cb, nullptr);
+    if (tray_data.cb != nullptr) {
+      tray_data.cb(nullptr);
+    }
+  #endif
 
     EXPECT_STREQ(tray_data.menu[0].text, "Open Sunshine");
     EXPECT_NE(tray_data.menu[0].cb, nullptr);
