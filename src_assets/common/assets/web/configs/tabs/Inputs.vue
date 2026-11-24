@@ -340,6 +340,26 @@ watch(
               default="true"
     ></Checkbox>
 
+    <!-- macOS Smooth Scrolling support -->
+    <Checkbox v-if="platform === 'macos' && config.mouse === 'enabled'"
+              class="mb-3"
+              id="macos_smooth_scrolling"
+              locale-prefix="config"
+              v-model="config.macos_smooth_scrolling"
+              default="true"
+    ></Checkbox>
+
+    <div v-if="platform === 'macos' && config.mouse === 'enabled'"
+         class="mb-3">
+      <label for="macos_smooth_scrolling_diagnostics" class="form-label">{{ $t('config.macos_smooth_scrolling_diagnostics') }}</label>
+      <select id="macos_smooth_scrolling_diagnostics" class="form-select" v-model="config.macos_smooth_scrolling_diagnostics">
+        <option value="disabled">{{ $t('config.macos_smooth_scrolling_diagnostics_disabled') }}</option>
+        <option value="enabled">{{ $t('config.macos_smooth_scrolling_diagnostics_enabled') }}</option>
+        <option value="trace">{{ $t('config.macos_smooth_scrolling_diagnostics_trace') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.macos_smooth_scrolling_diagnostics_desc') }}</div>
+    </div>
+
     <!-- Native pen/touch support -->
     <Checkbox v-if="config.mouse === 'enabled'"
               class="mb-3"

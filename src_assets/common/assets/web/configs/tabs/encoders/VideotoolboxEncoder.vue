@@ -28,5 +28,19 @@ const config = ref(props.config)
               v-model="config.vt_realtime"
               default="true"
     ></Checkbox>
+    <div class="mb-3">
+      <label for="capture_dynamic_range_macos" class="form-label">{{ $t('config.capture_dynamic_range_macos') }}</label>
+      <select id="capture_dynamic_range_macos" class="form-select" v-model="config.capture_dynamic_range_macos">
+        <option value="hdr_canonical">{{ $t('config.capture_dynamic_range_hdr_canonical') }}</option>
+        <option value="hdr_local">{{ $t('config.capture_dynamic_range_hdr_local') }}</option>
+        <option value="sdr">{{ $t('config.capture_dynamic_range_sdr') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.capture_dynamic_range_macos_desc') }}</div>
+    </div>
+    <div class="mb-3">
+      <label for="hdr_max_luminance_macos" class="form-label">{{ $t('config.hdr_max_luminance_macos') }}</label>
+      <input type="number" class="form-control" id="hdr_max_luminance_macos" min="-1" max="10000" step="1" v-model.number="config.hdr_max_luminance_macos" placeholder="-1" />
+      <div class="form-text">{{ $t('config.hdr_max_luminance_macos_desc') }}</div>
+    </div>
   </div>
 </template>
