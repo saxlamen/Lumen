@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <array>
+#include <chrono>
 #include <thread>
 
 // lib includes
@@ -153,6 +154,27 @@ namespace audio {
   }
 
   /**
+   * @brief Minimum spacing between reports of samples discarded by the bounded sample queue.
+   */
+  constexpr auto overflow_report_interval = 10s;
+
+  /**
+   * @brief Report audio samples the bounded queue discarded because the encoder thread fell behind.
+   *
+   * @param samples Sample queue feeding the encoder thread.
+   * @param reported_out Discard count already reported; updated to the current total.
+   */
+  void report_queue_overflows(safe::queue_t<std::vector<float>> &samples, std::uint64_t &reported_out) {
+    const auto total = samples.overflow_count();
+    if (total == reported_out) {
+      return;
+    }
+
+    BOOST_LOG(warning) << "Audio: "sv << (total - reported_out) << " samples discarded since the last report, "sv << total << " total"sv;
+    reported_out = total;
+  }
+
+  /**
    * @brief Run the capture loop for this backend.
    */
   void capture(safe::mail_t mail, config_t config, stream::session_t *channel_data) {
@@ -234,7 +256,7 @@ namespace audio {
     // Capture takes place on this thread
     platf::adjust_thread_priority(platf::thread_priority_e::critical);
 
-    auto samples = std::make_shared<sample_queue_t::element_type>(30);
+    auto samples = std::make_shared<sample_queue_t::element_type>(30, safe::queue_t<std::vector<float>>::overflow_policy_e::drop_one_oldest);
     std::jthread thread {encodeThread, samples, config, channel_data};
 
     auto fg = util::fail_guard([&samples, &thread, &shutdown_event]() {
@@ -245,10 +267,17 @@ namespace audio {
     });
 
     int samples_per_frame = frame_size * stream.channelCount;
+    std::uint64_t reported_overflows {};
+    auto next_overflow_report = std::chrono::steady_clock::now() + overflow_report_interval;
 
     while (!shutdown_event->peek()) {
       std::vector<float> sample_buffer;
       sample_buffer.resize(samples_per_frame);
+
+      if (auto now = std::chrono::steady_clock::now(); now >= next_overflow_report) {
+        next_overflow_report = now + overflow_report_interval;
+        report_queue_overflows(*samples, reported_overflows);
+      }
 
       auto status = mic->sample(sample_buffer);
       switch (status) {

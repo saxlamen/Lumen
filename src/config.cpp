@@ -796,6 +796,7 @@ namespace config {
     0,  // max_bitrate
     0,  // minimum_fps_target (0 = framerate)
     "enabled"s,  // virtual_display
+    true,  // show_cursor
   };
 
   /**
@@ -1805,6 +1806,7 @@ namespace config {
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
     string_f(vars, "virtual_display", video.virtual_display);
+    bool_f(vars, "show_cursor", video.show_cursor);
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
@@ -2187,5 +2189,30 @@ namespace config {
 #endif
 
     return 0;
+  }
+
+  void save_show_cursor(bool show_cursor) {
+    auto &path = sunshine.config_file;
+    auto content = file_handler::read_file(path.c_str());
+
+    std::string search = "show_cursor = ";
+    auto pos = content.find(search);
+
+    std::string new_value = std::string(search) + (show_cursor ? "true" : "false");
+
+    if (pos != std::string::npos) {
+      auto line_end = content.find('\n', pos);
+      if (line_end == std::string::npos) {
+        line_end = content.size();
+      }
+      content.replace(pos, line_end - pos, new_value);
+    } else {
+      if (!content.empty() && content.back() != '\n') {
+        content += '\n';
+      }
+      content += new_value + '\n';
+    }
+
+    file_handler::write_file(path.c_str(), content);
   }
 }  // namespace config

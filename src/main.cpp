@@ -259,6 +259,8 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
+  display_cursor = config::video.show_cursor;
+
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
   if (!log_deinit_guard) {
     BOOST_LOG(error) << "Logging failed to initialize"sv;

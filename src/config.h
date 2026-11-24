@@ -239,6 +239,7 @@ namespace config {
     int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
     std::string virtual_display;  ///< "enabled" or "disabled" — whether to create on-demand virtual displays (macOS only).
+    bool show_cursor;  ///< Whether to show the cursor in the captured stream.
   };
 
   /**
@@ -482,4 +483,11 @@ namespace config {
    * @return `true` when the resolution was capped.
    */
   bool cap_stream_resolution(int &width, int &height);
+
+  /**
+   * @brief Save the `show_cursor` configuration option to the active configuration file.
+   *
+   * @param show_cursor Whether to show the cursor in the captured stream.
+   */
+  void save_show_cursor(bool show_cursor);
 }  // namespace config
