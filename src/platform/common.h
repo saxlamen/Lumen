@@ -1375,6 +1375,12 @@ namespace platf {
   void virtual_display_destroy();
 
   /**
+   * @brief Check whether the most recent virtual_display_create reused an existing display.
+   * @return True if an existing persistent virtual display was reused.
+   */
+  bool virtual_display_was_reused();
+
+  /**
    * @brief Get the display ID of the currently active virtual display.
    * @return The display ID, or 0 if no virtual display is active.
    */

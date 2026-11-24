@@ -23,6 +23,10 @@ extern char **environ;
 static pthread_mutex_t vd_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pid_t vd_helper_pid = 0;
 static uint32_t vd_display_id = 0;
+static int vd_width = 0;
+static int vd_height = 0;
+static int vd_fps = 0;
+static bool vd_reused = false;
 
 // Get the path to the vd_helper binary (same directory as sunshine)
 static NSString *helperPath(void) {
@@ -42,8 +46,22 @@ static NSString *helperPath(void) {
 
 uint32_t virtual_display_create(int width, int height, int fps) {
   pthread_mutex_lock(&vd_mutex);
+  vd_reused = false;
 
-  // Destroy existing display first
+  // Reuse existing persistent vd_helper if alive and parameters match
+  if (vd_helper_pid > 0 && vd_display_id != 0 && kill(vd_helper_pid, 0) == 0 &&
+      vd_width == width && vd_height == height && vd_fps == fps) {
+    NSLog(@"[Sunshine] Reusing persistent virtual display %u (pid=%d, %dx%d@%dHz)",
+          vd_display_id, vd_helper_pid, width, height, fps);
+    kill(vd_helper_pid, SIGUSR1);
+    usleep(250000); // 250ms for WindowServer main-display swap
+    vd_reused = true;
+    uint32_t reused_id = vd_display_id;
+    pthread_mutex_unlock(&vd_mutex);
+    return reused_id;
+  }
+
+  // Destroy existing display if resolution/fps changed or child exited
   if (vd_helper_pid > 0) {
     NSLog(@"[Sunshine] Killing existing vd_helper (pid=%d, display=%u) before creating new one",
           vd_helper_pid, vd_display_id);
@@ -52,6 +70,9 @@ uint32_t virtual_display_create(int width, int height, int fps) {
     waitpid(vd_helper_pid, &status, 0);
     vd_helper_pid = 0;
     vd_display_id = 0;
+    vd_width = 0;
+    vd_height = 0;
+    vd_fps = 0;
   }
 
   NSString *helper = helperPath();
@@ -149,6 +170,9 @@ uint32_t virtual_display_create(int width, int height, int fps) {
 
   vd_helper_pid = pid;
   vd_display_id = displayID;
+  vd_width = width;
+  vd_height = height;
+  vd_fps = fps;
 
   NSLog(@"[Sunshine] Virtual display %u created via vd_helper (pid=%d)", displayID, pid);
 
@@ -171,6 +195,18 @@ uint32_t virtual_display_create(int width, int height, int fps) {
   return displayID;
 }
 
+void virtual_display_deactivate(void) {
+  pthread_mutex_lock(&vd_mutex);
+
+  if (vd_helper_pid > 0 && kill(vd_helper_pid, 0) == 0) {
+    NSLog(@"[Sunshine] Deactivating virtual display %u (keeping vd_helper pid=%d alive)",
+          vd_display_id, vd_helper_pid);
+    kill(vd_helper_pid, SIGUSR2);
+  }
+
+  pthread_mutex_unlock(&vd_mutex);
+}
+
 void virtual_display_destroy(void) {
   pthread_mutex_lock(&vd_mutex);
 
@@ -187,11 +223,22 @@ void virtual_display_destroy(void) {
     }
     vd_helper_pid = 0;
     vd_display_id = 0;
+    vd_width = 0;
+    vd_height = 0;
+    vd_fps = 0;
+    vd_reused = false;
     NSLog(@"[Sunshine] Destroyed virtual display %u", old_id);
     [[NSFileManager defaultManager] removeItemAtPath:@"/tmp/sunshine_vd_id" error:nil];
   }
 
   pthread_mutex_unlock(&vd_mutex);
+}
+
+bool virtual_display_was_reused(void) {
+  pthread_mutex_lock(&vd_mutex);
+  bool result = vd_reused;
+  pthread_mutex_unlock(&vd_mutex);
+  return result;
 }
 
 uint32_t virtual_display_get_id(void) {

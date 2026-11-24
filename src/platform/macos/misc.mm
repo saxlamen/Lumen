@@ -128,7 +128,13 @@ namespace platf {
 #pragma clang diagnostic pop
     // Record that we determined that we have the screen capture permission.
     screen_capture_allowed = true;
-    return std::make_unique<deinit_t>();
+
+    struct macos_deinit_t: deinit_t {
+      ~macos_deinit_t() override {
+        ::virtual_display_destroy();
+      }
+    };
+    return std::make_unique<macos_deinit_t>();
   }
 
   fs::path appdata() {
@@ -295,7 +301,7 @@ namespace platf {
   }
 
   void streaming_will_stop() {
-    virtual_display_destroy();
+    virtual_display_deactivate();
   }
 
   std::uint32_t virtual_display_create(int width, int height, int fps) {
@@ -304,6 +310,10 @@ namespace platf {
 
   void virtual_display_destroy() {
     ::virtual_display_destroy();
+  }
+
+  bool virtual_display_was_reused() {
+    return ::virtual_display_was_reused();
   }
 
   std::uint32_t virtual_display_get_id() {

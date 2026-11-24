@@ -99,22 +99,102 @@ namespace {
   }
 
   /**
-   * @brief Prompt the user to quit running Lumax instances and wait for termination.
+   * @brief User-selected installation options gathered from the initial dialog.
+   */
+  struct InstallOptions {
+    bool proceed = false;
+    bool replace_existing = true;
+    bool quit_running = true;
+    bool launch_after = true;
+    bool delete_dmg = false;
+  };
+
+  /**
+   * @brief Display a single initial dialog with checkboxes for all applicable install confirmations.
+   *
+   * @param has_existing Whether Lumax.app already exists in /Applications.
+   * @param is_running Whether any Lumax instance is currently running.
+   * @param dmg_name Filename of the backing .dmg image, or nil if not detected.
+   * @return Populated InstallOptions with proceed=true if Install was clicked.
+   */
+  InstallOptions show_install_options_dialog(
+    const bool has_existing,
+    const bool is_running,
+    NSString *const dmg_name
+  ) {
+    InstallOptions opts;
+    [NSApp activateIgnoringOtherApps:YES];
+
+    NSAlert *const alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleInformational;
+    alert.messageText = has_existing ? [NSString stringWithFormat:@"Update %@", kAppName] : [NSString stringWithFormat:@"Install %@", kAppName];
+    alert.informativeText = has_existing
+      ? [NSString stringWithFormat:@"%@ already exists in Applications. Select the actions to perform:", kAppBundleName]
+      : [NSString stringWithFormat:@"%@ will be installed to Applications. Select the actions to perform:", kAppBundleName];
+    [alert addButtonWithTitle:@"Install"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    NSStackView *const stack = [[NSStackView alloc] init];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 6.0;
+
+    NSButton *replace_cb = nil;
+    if (has_existing) {
+      replace_cb = [NSButton checkboxWithTitle:[NSString stringWithFormat:@"Replace existing %@ in Applications", kAppBundleName]
+                                        target:nil
+                                        action:nil];
+      replace_cb.state = NSControlStateValueOn;
+      [stack addArrangedSubview:replace_cb];
+    }
+
+    NSButton *quit_cb = nil;
+    if (is_running) {
+      quit_cb = [NSButton checkboxWithTitle:[NSString stringWithFormat:@"Quit currently running %@", kAppName]
+                                     target:nil
+                                     action:nil];
+      quit_cb.state = NSControlStateValueOn;
+      [stack addArrangedSubview:quit_cb];
+    }
+
+    NSButton *const launch_cb = [NSButton checkboxWithTitle:[NSString stringWithFormat:@"Launch %@ after installation", kAppName]
+                                                     target:nil
+                                                     action:nil];
+    launch_cb.state = NSControlStateValueOn;
+    [stack addArrangedSubview:launch_cb];
+
+    NSButton *delete_cb = nil;
+    if (dmg_name != nil) {
+      delete_cb = [NSButton checkboxWithTitle:[NSString stringWithFormat:@"Delete disk image (%@) after ejecting", dmg_name]
+                                       target:nil
+                                       action:nil];
+      delete_cb.state = NSControlStateValueOff;
+      [stack addArrangedSubview:delete_cb];
+    }
+
+    const NSSize fitting = stack.fittingSize;
+    stack.frame = NSMakeRect(0, 0, MAX(fitting.width, 340.0), fitting.height);
+    alert.accessoryView = stack;
+
+    if ([alert runModal] != NSAlertFirstButtonReturn) {
+      return opts;
+    }
+
+    opts.proceed = true;
+    opts.replace_existing = replace_cb ? (replace_cb.state == NSControlStateValueOn) : true;
+    opts.quit_running = quit_cb ? (quit_cb.state == NSControlStateValueOn) : false;
+    opts.launch_after = (launch_cb.state == NSControlStateValueOn);
+    opts.delete_dmg = delete_cb ? (delete_cb.state == NSControlStateValueOn) : false;
+    return opts;
+  }
+
+  /**
+   * @brief Terminate running Lumax instances and wait for exit.
    *
    * @param running Non-empty list of running Lumax instances.
-   * @return true if all instances exited; false if the user cancelled or termination failed.
+   * @return true if all instances exited; false if termination failed.
    */
-  bool quit_running_lumax(NSArray<NSRunningApplication *> *const running) {
-    const NSModalResponse resp = show_alert(
-      NSAlertStyleWarning,
-      [NSString stringWithFormat:@"%@ is currently running", kAppName],
-      [NSString stringWithFormat:@"%@ must be closed before installing. Do you want to quit %@ now?", kAppName, kAppName],
-      [NSString stringWithFormat:@"Quit %@", kAppName],
-      @"Cancel"
-    );
-    if (resp != NSAlertFirstButtonReturn) {
-      return false;
-    }
+  bool terminate_running_lumax(NSArray<NSRunningApplication *> *const running) {
 
     for (NSRunningApplication *app in running) {
       [app terminate];
@@ -392,23 +472,22 @@ int main(int argc, const char *argv[]) {
       return 1;
     }
 
-    // 1. If Lumax.app already exists in /Applications, ask to replace or cancel.
-    if ([[NSFileManager defaultManager] fileExistsAtPath:target_path]) {
-      const NSModalResponse replace_resp = show_alert(
-        NSAlertStyleInformational,
-        [NSString stringWithFormat:@"%@ is already installed", kAppName],
-        [NSString stringWithFormat:@"\"%@\" already exists in Applications. Do you want to replace it?", kAppBundleName],
-        @"Replace",
-        @"Cancel"
-      );
-      if (replace_resp != NSAlertFirstButtonReturn) {
-        return 0;
-      }
+    const bool has_existing = [[NSFileManager defaultManager] fileExistsAtPath:target_path];
+    NSArray<NSRunningApplication *> *const running = find_running_lumax(target_path);
+    NSString *const dmg_path = find_dmg_image_path(mount_root);
+
+    // 1. Show a single dialog with checkboxes for all applicable confirmations.
+    const InstallOptions opts = show_install_options_dialog(
+      has_existing,
+      running.count > 0,
+      dmg_path ? [dmg_path lastPathComponent] : nil
+    );
+    if (!opts.proceed || (has_existing && !opts.replace_existing)) {
+      return 0;
     }
 
-    // 2. If Lumax is currently running, ask whether to quit it before replacing.
-    NSArray<NSRunningApplication *> *const running = find_running_lumax(target_path);
-    if (running.count > 0 && !quit_running_lumax(running)) {
+    // 2. Quit running Lumax if requested.
+    if (running.count > 0 && opts.quit_running && !terminate_running_lumax(running)) {
       return 0;
     }
 
@@ -417,31 +496,14 @@ int main(int argc, const char *argv[]) {
       return 1;
     }
 
-    // 4. Ask whether to launch Lumax now.
-    const NSModalResponse launch_resp = show_alert(
-      NSAlertStyleInformational,
-      [NSString stringWithFormat:@"%@ has been installed", kAppName],
-      [NSString stringWithFormat:@"%@ was installed to Applications. Would you like to launch %@ now?", kAppBundleName, kAppName],
-      [NSString stringWithFormat:@"Launch %@", kAppName],
-      @"Done"
-    );
-    if (launch_resp == NSAlertFirstButtonReturn) {
+    // 4. Launch Lumax if requested.
+    if (opts.launch_after) {
       launch_installed_app(target_path);
     }
 
-    // 5. Ask whether to delete the .dmg file.
-    NSString *const dmg_path = find_dmg_image_path(mount_root);
-    if (dmg_path != nil) {
-      const NSModalResponse delete_resp = show_alert(
-        NSAlertStyleInformational,
-        @"Delete disk image?",
-        [NSString stringWithFormat:@"Do you want to delete \"%@\" after ejecting?", [dmg_path lastPathComponent]],
-        @"Keep",
-        @"Delete"
-      );
-      if (delete_resp == NSAlertSecondButtonReturn) {
-        delete_dmg_file(dmg_path);
-      }
+    // 5. Delete the .dmg file if requested.
+    if (dmg_path != nil && opts.delete_dmg) {
+      delete_dmg_file(dmg_path);
     }
 
     // 6. Detach/eject the mounted DMG once this process exits.

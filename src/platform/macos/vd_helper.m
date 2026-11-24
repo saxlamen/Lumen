@@ -22,6 +22,10 @@
 // Private CGVirtualDisplay API interface declarations (macOS 14+)
 @interface CGVirtualDisplayMode : NSObject
 - (instancetype)initWithWidth:(unsigned int)width height:(unsigned int)height refreshRate:(double)refreshRate;
+- (instancetype)initWithWidth:(unsigned int)width
+                       height:(unsigned int)height
+                  refreshRate:(double)refreshRate
+             transferFunction:(unsigned int)transferFunction;
 @end
 
 @interface CGVirtualDisplaySettings : NSObject
@@ -63,9 +67,18 @@ static CGVirtualDisplay *keepAlive = nil;
 static CGVirtualDisplayDescriptor *keepDesc = nil;
 
 static volatile sig_atomic_t shouldExit = 0;
+static volatile sig_atomic_t pendingMainAction = 0; // 1 = make virtual main, 2 = restore original main
 
 static void handle_signal(int sig) {
+  (void)sig;
   shouldExit = 1;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    CFRunLoopStop(CFRunLoopGetMain());
+  });
+}
+
+static void handle_main_signal(int sig) {
+  pendingMainAction = (sig == SIGUSR1) ? 1 : 2;
   dispatch_async(dispatch_get_main_queue(), ^{
     CFRunLoopStop(CFRunLoopGetMain());
   });
@@ -84,11 +97,61 @@ static BOOL checkDisplayInList(uint32_t targetID, uint32_t *outCount) {
 }
 
 /**
- * Force the virtual display into "extend" mode (not mirrored).
- * macOS may auto-mirror new displays, which hides them from CGGetActiveDisplayList.
- * This un-mirrors the display and positions it to the right of the main display.
+ * @brief Position the virtual display at origin (0, 0) so macOS makes it the main display.
+ *
+ * @param virtualID CoreGraphics display ID of the virtual display.
+ * @param virtualWidth Width of the virtual display used to offset the previous main display.
  */
-static void forceExtendMode(CGDirectDisplayID virtualID) {
+static void makeVirtualDisplayMain(CGDirectDisplayID virtualID, int virtualWidth) {
+  CGDirectDisplayID prevMain = CGMainDisplayID();
+  if (prevMain == virtualID) {
+    return;
+  }
+  CGDisplayConfigRef config = NULL;
+  CGError err = CGBeginDisplayConfiguration(&config);
+  if (err != kCGErrorSuccess || !config) {
+    fprintf(stderr, "[vd_helper] CGBeginDisplayConfiguration for main switch failed: %d\n", err);
+    return;
+  }
+  CGConfigureDisplayOrigin(config, virtualID, 0, 0);
+  if (prevMain != 0 && prevMain != virtualID) {
+    CGConfigureDisplayOrigin(config, prevMain, (int32_t)virtualWidth, 0);
+  }
+  err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+  fprintf(stderr, "[vd_helper] Set virtual display %u as main (prev=%u): %d\n", virtualID, prevMain, err);
+}
+
+/**
+ * @brief Restore the original display to origin (0, 0) when streaming pauses.
+ *
+ * @param virtualID CoreGraphics display ID of the virtual display.
+ * @param originalMainID CoreGraphics display ID of the original main display.
+ */
+static void restoreOriginalMain(CGDirectDisplayID virtualID, CGDirectDisplayID originalMainID) {
+  if (originalMainID == 0 || originalMainID == virtualID || !CGDisplayIsOnline(originalMainID)) {
+    return;
+  }
+  if (CGMainDisplayID() == originalMainID) {
+    return;
+  }
+  CGDisplayConfigRef config = NULL;
+  CGError err = CGBeginDisplayConfiguration(&config);
+  if (err != kCGErrorSuccess || !config) {
+    fprintf(stderr, "[vd_helper] CGBeginDisplayConfiguration for restore failed: %d\n", err);
+    return;
+  }
+  size_t origWidth = CGDisplayPixelsWide(originalMainID);
+  CGConfigureDisplayOrigin(config, originalMainID, 0, 0);
+  CGConfigureDisplayOrigin(config, virtualID, (int32_t)origWidth, 0);
+  err = CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+  fprintf(stderr, "[vd_helper] Restored original main display %u: %d\n", originalMainID, err);
+}
+
+/**
+ * Force the virtual display into "extend" mode (not mirrored) and make it the
+ * main display at origin (0, 0) so macOS input injection targets it directly.
+ */
+static void forceExtendMode(CGDirectDisplayID virtualID, int virtualWidth) {
   CGDirectDisplayID mainDisplay = CGMainDisplayID();
 
   // Check if main display is now mirroring our virtual display
@@ -99,7 +162,7 @@ static void forceExtendMode(CGDirectDisplayID virtualID) {
     CGBeginDisplayConfiguration(&config);
     if (config) {
       CGConfigureDisplayMirrorOfDisplay(config, mainMirrorTarget, kCGNullDirectDisplay);
-      CGCompleteDisplayConfiguration(config, kCGConfigureForAppOnly);
+      CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
     }
   }
 
@@ -110,7 +173,7 @@ static void forceExtendMode(CGDirectDisplayID virtualID) {
     CGBeginDisplayConfiguration(&config);
     if (config) {
       CGConfigureDisplayMirrorOfDisplay(config, virtualID, kCGNullDirectDisplay);
-      CGCompleteDisplayConfiguration(config, kCGConfigureForAppOnly);
+      CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
     }
   }
 
@@ -122,32 +185,107 @@ static void forceExtendMode(CGDirectDisplayID virtualID) {
     CGBeginDisplayConfiguration(&config);
     if (config) {
       CGConfigureDisplayMirrorOfDisplay(config, virtualID, kCGNullDirectDisplay);
-      CGCompleteDisplayConfiguration(config, kCGConfigureForAppOnly);
+      CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
     }
   }
 
-  // Position it to the right of main display
+  // Make the virtual display the main display at (0, 0) and shift previous main to the right.
   {
     CGDisplayConfigRef config = NULL;
     CGBeginDisplayConfiguration(&config);
     if (config) {
-      size_t mainWidth = CGDisplayPixelsWide(mainDisplay);
-      CGConfigureDisplayOrigin(config, virtualID, (int32_t)mainWidth, 0);
-      CGCompleteDisplayConfiguration(config, kCGConfigureForAppOnly);
+      CGConfigureDisplayOrigin(config, virtualID, 0, 0);
+      if (mainDisplay != 0 && mainDisplay != virtualID) {
+        CGConfigureDisplayOrigin(config, mainDisplay, (int32_t)virtualWidth, 0);
+      }
+      CGCompleteDisplayConfiguration(config, kCGConfigureForSession);
+    }
+  }
+}
+
+/**
+ * @brief Create a CGVirtualDisplayMode, optionally requesting HDR/EDR transfer function.
+ *
+ * @param width Pixel width of the display mode.
+ * @param height Pixel height of the display mode.
+ * @param fps Refresh rate in Hz.
+ * @param tryHDR Whether to request the HDR/EDR transfer function (transferFunction = 1).
+ * @return A configured CGVirtualDisplayMode instance, or nil on failure.
+ */
+static CGVirtualDisplayMode *createDisplayMode(unsigned int width, unsigned int height, double fps, BOOL tryHDR) {
+  CGVirtualDisplayMode *mode = nil;
+  if (tryHDR) {
+    mode = [[CGVirtualDisplayMode alloc] initWithWidth:width height:height refreshRate:fps transferFunction:1];
+  }
+  if (!mode) {
+    mode = [[CGVirtualDisplayMode alloc] initWithWidth:width height:height refreshRate:fps];
+  }
+  return mode;
+}
+
+/**
+ * @brief Build the list of CGVirtualDisplayMode entries for the virtual display.
+ *
+ * Always includes the requested native mode and its half-resolution HiDPI pair.
+ * For 4:3 streams, also registers mainstream 4:3 resolutions and their 2x
+ * backing stores so macOS System Settings offers crisp HiDPI scaling options.
+ *
+ * @param width Requested pixel width.
+ * @param height Requested pixel height.
+ * @param fps Refresh rate in Hz.
+ * @param tryHDR Whether to request the HDR/EDR transfer function.
+ * @return Non-empty array of CGVirtualDisplayMode objects, or nil if native mode failed.
+ */
+static NSArray<CGVirtualDisplayMode *> *buildDisplayModes(int width, int height, double fps, BOOL tryHDR) {
+  CGVirtualDisplayMode *nativeMode = createDisplayMode((unsigned int)width, (unsigned int)height, fps, tryHDR);
+  if (!nativeMode) {
+    return nil;
+  }
+
+  NSMutableArray<CGVirtualDisplayMode *> *modes = [NSMutableArray arrayWithObject:nativeMode];
+  NSMutableSet<NSString *> *seen = [NSMutableSet setWithObject:[NSString stringWithFormat:@"%dx%d", width, height]];
+
+  void (^addIfNew)(int, int) = ^(int w, int h) {
+    if (w <= 0 || h <= 0) {
+      return;
+    }
+    NSString *key = [NSString stringWithFormat:@"%dx%d", w, h];
+    if ([seen containsObject:key]) {
+      return;
+    }
+    CGVirtualDisplayMode *m = createDisplayMode((unsigned int)w, (unsigned int)h, fps, tryHDR);
+    if (m) {
+      [seen addObject:key];
+      [modes addObject:m];
+    }
+  };
+
+  addIfNew(width / 2, height / 2);
+
+  // Register mainstream 4:3 resolutions (and 2x backing stores for HiDPI) when 4:3 is requested
+  if (abs(width * 3 - height * 4) <= 4) {
+    static const int kFourThreeModes[][2] = {
+      {800, 600},
+      {1024, 768},
+      {1152, 864},
+      {1280, 960},
+      {1400, 1050},
+      {1440, 1080},
+      {1600, 1200},
+      {1920, 1440},
+      {2048, 1536},
+      {2304, 1728},
+      {2560, 1920},
+      {2800, 2100},
+      {2880, 2160},
+      {3200, 2400},
+    };
+    for (size_t i = 0; i < sizeof(kFourThreeModes) / sizeof(kFourThreeModes[0]); i++) {
+      addIfNew(kFourThreeModes[i][0], kFourThreeModes[i][1]);
     }
   }
 
-  // If the virtual display became the main display, restore the original
-  CGDirectDisplayID newMain = CGMainDisplayID();
-  if (newMain == virtualID && newMain != mainDisplay) {
-    fprintf(stderr, "[vd_helper] Virtual display became main, restoring original main %u\n", mainDisplay);
-    CGDisplayConfigRef config = NULL;
-    CGBeginDisplayConfiguration(&config);
-    if (config) {
-      CGConfigureDisplayOrigin(config, mainDisplay, 0, 0);
-      CGCompleteDisplayConfiguration(config, kCGConfigureForAppOnly);
-    }
-  }
+  return modes;
 }
 
 int main(int argc, const char *argv[]) {
@@ -184,6 +322,10 @@ int main(int argc, const char *argv[]) {
     signal(SIGTERM, handle_signal);
     signal(SIGINT, handle_signal);
     signal(SIGHUP, handle_signal);
+    signal(SIGUSR1, handle_main_signal);
+    signal(SIGUSR2, handle_main_signal);
+
+    CGDirectDisplayID originalMainID = CGMainDisplayID();
 
     // Create display directly on main thread
     CGVirtualDisplayDescriptor *desc = [[CGVirtualDisplayDescriptor alloc] init];
@@ -191,44 +333,41 @@ int main(int argc, const char *argv[]) {
     desc.vendorID = 0xF0F0;
     desc.productID = 0x5678;
     desc.serialNum = arc4random();
-    desc.maxPixelsWide = (unsigned int)width;
-    desc.maxPixelsHigh = (unsigned int)height;
+    const BOOL isFourThree = (abs(width * 3 - height * 4) <= 4);
+    desc.maxPixelsWide = isFourThree ? MAX((unsigned int)width, 3200u) : (unsigned int)width;
+    desc.maxPixelsHigh = isFourThree ? MAX((unsigned int)height, 2400u) : (unsigned int)height;
     // Fixed 27" monitor physical size — do NOT scale linearly with resolution.
     // WindowServer rejects displays with unreasonably large physical dimensions.
     desc.sizeInMillimeters = CGSizeMake(597, 336);
     desc.whitePoint = CGPointMake(0.3127, 0.3290);
-    desc.redPrimary = CGPointMake(0.64, 0.33);
-    desc.greenPrimary = CGPointMake(0.30, 0.60);
-    desc.bluePrimary = CGPointMake(0.15, 0.06);
+    BOOL supportsTransferFunction = [CGVirtualDisplayMode instancesRespondToSelector:
+      @selector(initWithWidth:height:refreshRate:transferFunction:)];
+    if (supportsTransferFunction) {
+      // BT.2020 primaries for HDR/EDR-capable virtual display
+      desc.redPrimary = CGPointMake(0.708, 0.292);
+      desc.greenPrimary = CGPointMake(0.170, 0.797);
+      desc.bluePrimary = CGPointMake(0.131, 0.046);
+    } else {
+      desc.redPrimary = CGPointMake(0.64, 0.33);
+      desc.greenPrimary = CGPointMake(0.30, 0.60);
+      desc.bluePrimary = CGPointMake(0.15, 0.06);
+    }
     [desc setDispatchQueue:dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0)];
     desc.terminationHandler = ^(id s, id d) {
       fprintf(stderr, "[vd_helper] Virtual display terminated by system\n");
     };
 
-    CGVirtualDisplayMode *nativeMode = [[CGVirtualDisplayMode alloc] initWithWidth:(unsigned int)width
-                                                                          height:(unsigned int)height
-                                                                     refreshRate:(double)fps];
-    if (!nativeMode) {
+    NSArray<CGVirtualDisplayMode *> *modes = buildDisplayModes(width, height, (double)fps, supportsTransferFunction);
+    if (!modes) {
       fprintf(stderr, "[vd_helper] Failed to create CGVirtualDisplayMode\n");
       fprintf(stdout, "0\n");
       fflush(stdout);
       return 1;
     }
 
-    // Build mode list with native + half-resolution mode.
-    // With hiDPI=1, macOS selects the native mode as the retina backing store
-    // and the half-res mode as the logical resolution (2x scaling).
-    // Without this, macOS only gives us half the requested pixel resolution.
-    CGVirtualDisplayMode *halfMode = [[CGVirtualDisplayMode alloc] initWithWidth:(unsigned int)(width / 2)
-                                                                         height:(unsigned int)(height / 2)
-                                                                    refreshRate:(double)fps];
     CGVirtualDisplaySettings *settings = [[CGVirtualDisplaySettings alloc] init];
     settings.hiDPI = 1;
-    if (halfMode) {
-      settings.modes = @[nativeMode, halfMode];
-    } else {
-      settings.modes = @[nativeMode];
-    }
+    settings.modes = modes;
 
     CGVirtualDisplay *display = [[CGVirtualDisplay alloc] initWithDescriptor:desc];
     if (!display) {
@@ -261,7 +400,7 @@ int main(int argc, const char *argv[]) {
 
     fprintf(stderr, "[vd_helper] Display %u created, activating...\n", resultID);
 
-    // Step 1: Activate display via SkyLight SLSConfigureDisplayEnabled
+    // Step 1: Activate display via SkyLight SLSConfigureDisplayEnabled and make it main (0, 0)
     {
       CGDisplayConfigRef cgConfig = NULL;
       CGError err = SLSBeginDisplayConfiguration(&cgConfig);
@@ -269,9 +408,11 @@ int main(int argc, const char *argv[]) {
       if (err == kCGErrorSuccess && cgConfig) {
         err = SLSConfigureDisplayEnabled(cgConfig, resultID, true);
         fprintf(stderr, "[vd_helper] SLSConfigureDisplayEnabled(%u, true): %d\n", resultID, err);
-        CGDirectDisplayID mainDisplay = CGMainDisplayID();
-        size_t mainWidth = CGDisplayPixelsWide(mainDisplay);
-        SLSConfigureDisplayOrigin(cgConfig, resultID, (int32_t)mainWidth, 0);
+        CGDirectDisplayID prevMain = CGMainDisplayID();
+        SLSConfigureDisplayOrigin(cgConfig, resultID, 0, 0);
+        if (prevMain != 0 && prevMain != resultID) {
+          SLSConfigureDisplayOrigin(cgConfig, prevMain, (int32_t)width, 0);
+        }
         CGError completeErr = SLSCompleteDisplayConfiguration(cgConfig, kCGConfigureForSession, 0);
         fprintf(stderr, "[vd_helper] SLSCompleteDisplayConfiguration: %d\n", completeErr);
       }
@@ -283,7 +424,7 @@ int main(int argc, const char *argv[]) {
     // Step 2: Force extend mode (un-mirror) if needed
     if (CGDisplayIsInMirrorSet(resultID) || CGDisplayMirrorsDisplay(resultID) != 0) {
       fprintf(stderr, "[vd_helper] Mirror detected, forcing extend mode\n");
-      forceExtendMode(resultID);
+      forceExtendMode(resultID, width);
     }
 
     // Step 3: Switch to native resolution (1x scale) mode.
@@ -321,6 +462,10 @@ int main(int argc, const char *argv[]) {
     // Wait for mode switch to take effect
     usleep(500000); // 500ms
 
+    // Ensure virtual display is at (0, 0) so it becomes CGMainDisplayID()
+    makeVirtualDisplayMain(resultID, width);
+    usleep(300000); // 300ms
+
     // Step 3: If still not visible, try again after a longer wait
     uint32_t count = 0;
     BOOL found = checkDisplayInList(resultID, &count);
@@ -330,7 +475,7 @@ int main(int argc, const char *argv[]) {
       // Check mirror state again
       fprintf(stderr, "[vd_helper] Mirror state (retry): inMirrorSet=%d, mirrorsDisplay=%u\n",
               CGDisplayIsInMirrorSet(resultID), CGDisplayMirrorsDisplay(resultID));
-      forceExtendMode(resultID);
+      forceExtendMode(resultID, width);
       usleep(500000);
       found = checkDisplayInList(resultID, &count);
     }
@@ -362,9 +507,18 @@ int main(int argc, const char *argv[]) {
     fprintf(stdout, "%u\n", resultID);
     fflush(stdout);
 
-    // Keep alive via CFRunLoop
+    // Keep alive via CFRunLoop and handle main-display switch signals
     while (!shouldExit) {
-      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1.0, false);
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, false);
+      sig_atomic_t action = pendingMainAction;
+      if (action != 0) {
+        pendingMainAction = 0;
+        if (action == 1) {
+          makeVirtualDisplayMain(resultID, width);
+        } else if (action == 2) {
+          restoreOriginalMain(resultID, originalMainID);
+        }
+      }
     }
 
     fprintf(stderr, "[vd_helper] Shutting down, releasing display %u\n", resultID);
