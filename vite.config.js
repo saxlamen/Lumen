@@ -36,10 +36,13 @@ else {
 const emitTrayIconsPlugin = {
     name: 'emit-tray-icons',
     buildStart() {
+        const trayIconRelPath = process.platform === 'darwin'
+            ? 'src_assets/macos/build/lumax-tray.svg'
+            : 'sunshine.svg';
         this.emitFile({
             type: 'asset',
             fileName: 'images/logo-sunshine.svg',
-            source: fs.readFileSync(resolve(projectRoot, 'sunshine.svg')),
+            source: fs.readFileSync(resolve(projectRoot, trayIconRelPath)),
         });
 
         const virtualHidIcon = process.env.SUNSHINE_LIBVIRTUALHID_ICON;
