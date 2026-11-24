@@ -67,6 +67,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture_loop.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture_loop.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/smooth_scroll.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/smooth_scroll.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/virtual_display.h"

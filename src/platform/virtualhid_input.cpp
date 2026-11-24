@@ -25,6 +25,9 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "virtualhid_input.h"
+#ifdef __APPLE__
+  #include "src/platform/macos/smooth_scroll.h"
+#endif
 
 using namespace std::literals;
 
@@ -1161,6 +1164,9 @@ namespace platf {
    * @return Owning handle for the global virtual input backend.
    */
   input_t input() {
+#ifdef __APPLE__
+    macos::init_smooth_scroll();
+#endif
     return input_t {new input_raw_t {}};
   }
 
@@ -1169,6 +1175,9 @@ namespace platf {
   }
 
   void freeInput(input_raw_t *input) {
+#ifdef __APPLE__
+    macos::shutdown_smooth_scroll();
+#endif
     std::default_delete<input_raw_t> {}(input);
   }
 
@@ -1198,10 +1207,22 @@ namespace platf {
   }
 
   void scroll(input_t &input, int high_res_distance) {
+#ifdef __APPLE__
+    if (config::input.macos_smooth_scrolling) {
+      macos::scroll(high_res_distance);
+      return;
+    }
+#endif
     virtualhid::scroll(virtualhid::get_input_context(input), high_res_distance);
   }
 
   void hscroll(input_t &input, int high_res_distance) {
+#ifdef __APPLE__
+    if (config::input.macos_smooth_scrolling) {
+      macos::hscroll(high_res_distance);
+      return;
+    }
+#endif
     virtualhid::hscroll(virtualhid::get_input_context(input), high_res_distance);
   }
 

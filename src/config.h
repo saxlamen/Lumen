@@ -323,6 +323,8 @@ namespace config {
     bool always_send_scancodes;  ///< Always send keyboard scancodes when available.
 
     bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
+    bool macos_smooth_scrolling;  ///< Enable pixel-based smooth scrolling on macOS.
+    std::string macos_smooth_scrolling_diagnostics;  ///< "disabled", "enabled" or "trace": macOS scrolling diagnostics verbosity.
     bool native_pen_touch;  ///< Enable native pen and touch injection.
   };
 
