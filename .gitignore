@@ -61,3 +61,6 @@ junit.xml
 *.pyc
 .venv/
 venv/
+
+# macOS local provisioning profiles
+*.provisionprofile

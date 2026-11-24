@@ -157,10 +157,27 @@ qt6_deploy_runtime_dependencies(
               message(FATAL_ERROR \"codesign failed while signing vd_helper\")
           endif()
 
+          # Embed provisioning profile and virtual HID entitlements when a matching local profile is present.
+          set(_selected_entitlements \"${APPLE_ENTITLEMENTS_FILE}\")
+          set(_profile_src \"${SUNSHINE_SOURCE_ASSETS_DIR}/macos/Lumax.provisionprofile\")
+          set(_hid_entitlements \"${SUNSHINE_SOURCE_ASSETS_DIR}/macos/entitlements.hid.plist\")
+          if(EXISTS \"\${_profile_src}\" AND EXISTS \"\${_hid_entitlements}\")
+              file(READ \"\${_profile_src}\" _profile_bytes HEX)
+              # 50726f766973696f6e656444657669636573 == "ProvisionedDevices" (present in Development profiles, absent in Developer ID)
+              string(FIND \"\${_profile_bytes}\" \"50726f766973696f6e656444657669636573\" _is_dev_profile)
+              set(_id_str \"${APPLE_CODESIGN_IDENTITY}\")
+              if((NOT _is_dev_profile EQUAL -1 AND _id_str MATCHES \"Apple Development\") OR
+                 (_is_dev_profile EQUAL -1 AND _id_str MATCHES \"Developer ID\"))
+                  file(COPY_FILE \"\${_profile_src}\" \"\${_app}/Contents/embedded.provisionprofile\")
+                  set(_selected_entitlements \"\${_hid_entitlements}\")
+                  message(STATUS \"Embedded provisioning profile and virtual HID entitlements into \${_app}\")
+              endif()
+          endif()
+
           # Sign the app last
           execute_process(COMMAND /usr/bin/codesign --verbose=2
               --sign \"${APPLE_CODESIGN_IDENTITY}\" \"\${_app}\"
-              --entitlements \"${APPLE_ENTITLEMENTS_FILE}\"
+              --entitlements \"\${_selected_entitlements}\"
               --force --timestamp --options=runtime
               RESULT_VARIABLE rc3
           )
