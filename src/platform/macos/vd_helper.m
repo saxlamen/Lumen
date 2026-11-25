@@ -342,7 +342,9 @@ int main(int argc, const char *argv[]) {
     desc.name = @"Sunshine Virtual Display";
     desc.vendorID = 0xF0F0;
     desc.productID = 0x5678;
-    desc.serialNum = arc4random();
+    // Deterministic serial per resolution so macOS remembers scaling preferences across rebuilds.
+    uint32_t serial = (((uint32_t)width & 0xFFFFu) << 16) | ((uint32_t)height & 0xFFFFu);
+    desc.serialNum = serial != 0 ? serial : 1u;
     const BOOL isFourThree = (abs(width * 3 - height * 4) <= 4);
     desc.maxPixelsWide = isFourThree ? MAX((unsigned int)width, 3200u) : (unsigned int)width;
     desc.maxPixelsHigh = isFourThree ? MAX((unsigned int)height, 2400u) : (unsigned int)height;
@@ -437,35 +439,48 @@ int main(int argc, const char *argv[]) {
       forceExtendMode(resultID, width);
     }
 
-    // Step 3: Switch to native resolution (1x scale) mode.
-    // The display starts as retina 2x (logical=half, pixel=full).
-    // For streaming, we want native 1x (logical=full, pixel=full) to avoid
-    // compositor overhead that causes latency and FPS drops.
+    // Step 3: Switch to native resolution (1x scale) mode only if macOS did not
+    // already restore a user-selected scaled mode (e.g. 1280x960 HiDPI).
     {
-      NSDictionary *opts = @{(NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES};
-      CFArrayRef allModes = CGDisplayCopyAllDisplayModes(resultID, (CFDictionaryRef)opts);
-      if (allModes) {
-        CGDisplayModeRef nativeMode = NULL;
-        CFIndex modeCount = CFArrayGetCount(allModes);
-        for (CFIndex i = 0; i < modeCount; i++) {
-          CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
-          size_t lw = CGDisplayModeGetWidth(m);
-          size_t lh = CGDisplayModeGetHeight(m);
-          size_t pw = CGDisplayModeGetPixelWidth(m);
-          size_t ph = CGDisplayModeGetPixelHeight(m);
-          // Find the 1x native mode matching our requested resolution
-          if ((int)lw == width && (int)lh == height && pw == lw && ph == lh) {
-            nativeMode = m;
-            break;
+      CGDisplayModeRef currentMode = CGDisplayCopyDisplayMode(resultID);
+      size_t curW = currentMode ? CGDisplayModeGetWidth(currentMode) : 0;
+      size_t curH = currentMode ? CGDisplayModeGetHeight(currentMode) : 0;
+      if (currentMode) {
+        CGDisplayModeRelease(currentMode);
+      }
+
+      const BOOL hasRestoredCustomMode = (curW > 0 && curH > 0 &&
+        !((int)curW == width / 2 && (int)curH == height / 2) &&
+        !((int)curW == width && (int)curH == height));
+
+      if (hasRestoredCustomMode) {
+        fprintf(stderr, "[vd_helper] Preserving macOS-restored mode %zux%zu\n", curW, curH);
+      } else {
+        NSDictionary *opts = @{(NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES};
+        CFArrayRef allModes = CGDisplayCopyAllDisplayModes(resultID, (CFDictionaryRef)opts);
+        if (allModes) {
+          CGDisplayModeRef nativeMode = NULL;
+          CFIndex modeCount = CFArrayGetCount(allModes);
+          for (CFIndex i = 0; i < modeCount; i++) {
+            CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(allModes, i);
+            size_t lw = CGDisplayModeGetWidth(m);
+            size_t lh = CGDisplayModeGetHeight(m);
+            size_t pw = CGDisplayModeGetPixelWidth(m);
+            size_t ph = CGDisplayModeGetPixelHeight(m);
+            // Find the 1x native mode matching our requested resolution
+            if ((int)lw == width && (int)lh == height && pw == lw && ph == lh) {
+              nativeMode = m;
+              break;
+            }
           }
+          if (nativeMode) {
+            CGError modeErr = CGDisplaySetDisplayMode(resultID, nativeMode, NULL);
+            fprintf(stderr, "[vd_helper] Switched to native %dx%d (1x scale): %d\n", width, height, modeErr);
+          } else {
+            fprintf(stderr, "[vd_helper] Native %dx%d mode not found, staying at retina 2x\n", width, height);
+          }
+          CFRelease(allModes);
         }
-        if (nativeMode) {
-          CGError modeErr = CGDisplaySetDisplayMode(resultID, nativeMode, NULL);
-          fprintf(stderr, "[vd_helper] Switched to native %dx%d (1x scale): %d\n", width, height, modeErr);
-        } else {
-          fprintf(stderr, "[vd_helper] Native %dx%d mode not found, staying at retina 2x\n", width, height);
-        }
-        CFRelease(allModes);
       }
     }
 
