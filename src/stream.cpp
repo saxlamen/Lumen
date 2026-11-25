@@ -2174,11 +2174,20 @@ namespace stream {
     auto current_time = start_time;
 
     while (current_time - start_time < config::stream.ping_timeout) {
-      auto delta_time = current_time - start_time;
+      if (session->shutdown_event->peek()) {
+        return -1;
+      }
 
-      auto msg_opt = messages->pop(config::stream.ping_timeout - delta_time);
+      auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(config::stream.ping_timeout - (current_time - start_time));
+      auto slice = std::min(remaining, 100ms);
+
+      auto msg_opt = messages->pop(slice);
       if (!msg_opt) {
-        break;
+        if (!messages->running()) {
+          break;
+        }
+        current_time = std::chrono::steady_clock::now();
+        continue;
       }
 
       TUPLE_2D_REF(recv_peer, msg, *msg_opt);
