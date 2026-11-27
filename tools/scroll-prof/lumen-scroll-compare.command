@@ -6,7 +6,7 @@
 #   ./lumen-scroll-compare.command --gestures                → 連每個手勢的明細一起列
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-DIR="${LUMEN_SCROLL_DATA:-$HOME/Scripts/Lumen/var/scroll-data}"
+DIR="${LUMEN_SCROLL_DATA:-$SCRIPT_DIR/../../var/scroll-data}"
 SCRIPT="$SCRIPT_DIR/lumen-scroll-compare.py"
 
 if [ ! -f "$SCRIPT" ]; then

@@ -19,7 +19,8 @@ import statistics as st
 import sys
 from collections import Counter
 
-CSV_GLOB = os.path.expanduser("~/Scripts/Lumen/var/scroll-data/lumen_*.csv")
+REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+CSV_GLOB = os.path.join(REPO_ROOT, "var", "scroll-data", "lumen_*.csv")
 LOG_GLOB = os.path.expanduser("~/.config/sunshine/sunshine.log*")
 
 GOOD = "✅"

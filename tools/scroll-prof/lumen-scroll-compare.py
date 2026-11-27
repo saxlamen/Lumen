@@ -602,13 +602,15 @@ def print_run_detail(run):
 
 def main():
     ap = argparse.ArgumentParser(description="比較 scroll 事件剖面")
-    ap.add_argument("files", nargs="*", help="CSV 檔（預設讀 var/scrollll-data/*.csv）")
+    ap.add_argument("files", nargs="*", help="CSV 檔（預設讀 var/scroll-data/*.csv）")
     ap.add_argument("--gestures", action="store_true", help="列出每個手勢明細")
     ap.add_argument("--bin-ms", type=float, default=None, help="測速窗口 ms（預設用記錄到的更新率）")
     ap.add_argument("--json", action="store_true", help="輸出 JSON")
     args = ap.parse_args()
 
-    files = args.files or sorted(glob.glob(os.path.expanduser("~/Scripts/Lumen/var/scrollop/scroll-data/*.csv")),
+    repo_root = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    default_dir = os.environ.get("LUMEN_SCROLL_DATA") or os.path.join(repo_root, "var", "scroll-data")
+    files = args.files or sorted(glob.glob(os.path.join(default_dir, "*.csv")),
                                  key=os.path.getmtime)
     if not files:
         print("找不到 CSV。先跑 tools/scroll-prof/lumen-scroll-profile.command 記錄。")

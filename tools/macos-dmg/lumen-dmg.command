@@ -16,7 +16,7 @@
 # 打包成「未簽名」或「Developer ID 簽名 + 公證」兩種 DMG。
 set -uo pipefail
 
-REPO="$HOME/Scripts/Lumen"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 BUILD_DIR="$REPO/cmake-build-macos-app"
 DMG="$BUILD_DIR/cpack_artifacts/Lumax.dmg"
 IDENTITY="${APPLE_CODESIGN_IDENTITY:-}"
@@ -125,7 +125,7 @@ if [ ! -f "$DMG" ]; then
   echo "❌ 找不到 $DMG"
   exit 1
 fi
-APP="$BUILD_DIR/cpack_artifacts/_CPack_Packages/Darwin/DragNDrop/Lumax/ALL_IN_ONE/.Lumax/Lumax.app"
+APP="$BUILD_DIR/cpack_artifacts/_CPack_Packages/Darwin/DragNDrop/Lumax/.Lumax/Lumax.app"
 OUT="$HOME/Desktop/Lumax-$VERSION-$(uname -m).dmg"
 cp -f "$DMG" "$OUT"
 

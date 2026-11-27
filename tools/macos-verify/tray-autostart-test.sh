@@ -24,7 +24,8 @@ items() { osascript -e 'tell application "System Events" to get the name of ever
 echo "1) 裝開發版並啟動"
 pkill -TERM -f "[S]unshine.app/Contents/MacOS" 2>/dev/null; sleep 3
 pkill -9 -f "[S]unshine.app/Contents/MacOS" 2>/dev/null; sleep 1
-(cd ~/Scripts/Lumen && SHOULD_SIGN=true cmake --install cmake-build-macos-app --prefix /Applications >/dev/null 2>&1)
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
+(cd "$REPO" && SHOULD_SIGN=true cmake --install cmake-build-macos-app --prefix /Applications >/dev/null 2>&1)
 open -n "$APP"; sleep 10
 P=$(pgrep -x Sunshine | head -1)
 echo "   pid=${P:-失敗}   登入項目筆數: $(items)"
