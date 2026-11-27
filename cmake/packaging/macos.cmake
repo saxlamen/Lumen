@@ -39,26 +39,6 @@ else()
         BUNDLE DESTINATION "${MAC_PAYLOAD_DIR}"
         COMPONENT Runtime)
 
-    if(SUNSHINE_ENABLE_TRAY)
-        # Import Qt in this directory so its deployment commands and targets are visible here.
-        set(_sunshine_module_path "${CMAKE_MODULE_PATH}")
-        find_package(Qt6 REQUIRED COMPONENTS Core)
-        set(CMAKE_MODULE_PATH "${_sunshine_module_path}")
-        unset(_sunshine_module_path)
-
-        qt6_generate_deploy_script(
-            TARGET sunshine
-            OUTPUT_SCRIPT SUNSHINE_QT_DEPLOY_SCRIPT
-            CONTENT "
-qt6_deploy_runtime_dependencies(
-    EXECUTABLE \"${MAC_PAYLOAD_DIR}/$<TARGET_FILE_NAME:sunshine>.app\"
-    NO_APP_STORE_COMPLIANCE
-    NO_TRANSLATIONS
-    DEPLOY_TOOL_OPTIONS -no-codesign
-)")
-        install(SCRIPT "${SUNSHINE_QT_DEPLOY_SCRIPT}" COMPONENT Runtime)
-    endif()
-
     install(FILES "${APPLE_PLIST_FILE}"
             DESTINATION "${MAC_BUNDLE_CONTENTS}"
             COMPONENT Runtime)

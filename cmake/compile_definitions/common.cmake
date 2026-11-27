@@ -242,7 +242,9 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
 
 # tray icon
 if(SUNSHINE_ENABLE_TRAY)
-    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES tray::tray)
+    if(NOT APPLE)
+        list(APPEND SUNSHINE_EXTERNAL_LIBRARIES tray::tray)
+    endif()
 else()
     set(SUNSHINE_TRAY 0)
     message(STATUS "Tray icon disabled")

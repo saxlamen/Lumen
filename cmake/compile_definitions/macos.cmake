@@ -82,6 +82,19 @@ set(PLATFORM_TARGET_FILES
         ${APPLE_ENTITLEMENTS_FILE}
         ${APPLE_PLIST_FILE})
 
+if(SUNSHINE_ENABLE_TRAY)
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/platform/macos/tray_macos.mm")
+    set_source_files_properties(
+            "${CMAKE_SOURCE_DIR}/src/platform/macos/tray_macos.mm"
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    if(BUILD_TESTS)
+        set_property(
+                SOURCE "${CMAKE_SOURCE_DIR}/src/platform/macos/tray_macos.mm"
+                APPEND PROPERTY COMPILE_DEFINITIONS TRAY_ENABLE_TEST_HOOKS)
+    endif()
+endif()
+
 # virtual_display.m uses ARC (required for CGVirtualDisplay private API lifecycle management)
 set_source_files_properties(
         "${CMAKE_SOURCE_DIR}/src/platform/macos/virtual_display.m"
