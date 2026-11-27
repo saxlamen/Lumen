@@ -159,7 +159,10 @@ qt6_deploy_runtime_dependencies(
 
           # Embed provisioning profile and virtual HID entitlements when a matching local profile is present.
           set(_selected_entitlements \"${APPLE_ENTITLEMENTS_FILE}\")
-          set(_profile_src \"${SUNSHINE_SOURCE_ASSETS_DIR}/macos/Lumax.provisionprofile\")
+          set(_profile_src \"\$ENV{APPLE_PROVISION_PROFILE}\")
+          if(NOT _profile_src)
+              set(_profile_src \"${SUNSHINE_SOURCE_ASSETS_DIR}/macos/Lumax.provisionprofile\")
+          endif()
           set(_hid_entitlements \"${SUNSHINE_SOURCE_ASSETS_DIR}/macos/entitlements.hid.plist\")
           if(EXISTS \"\${_profile_src}\" AND EXISTS \"\${_hid_entitlements}\")
               file(READ \"\${_profile_src}\" _profile_bytes HEX)

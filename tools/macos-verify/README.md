@@ -20,7 +20,7 @@ server, and clicks there fail in ways that look like the app being broken.
 
 ## Release checklist
 
-1. Build and notarize: `~/Desktop/Lumen/lumen-dmg.command` (double-clicked, so it runs in the GUI
+1. Build and notarize: `tools/macos-dmg/lumax-dmg.command` (double-clicked, so it runs in the GUI
    session - the packaging step drives Finder through AppleScript and hangs in a background
    session).
 2. `./verify-release.sh` - everything in its list should be `1` or a pass. A `0` for
