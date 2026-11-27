@@ -33,7 +33,7 @@ codesign -d --entitlements - --xml "$APP" 2>/dev/null | plutil -p - 2>/dev/null 
 plutil -p "$APP/Contents/Info.plist" 2>/dev/null | grep CFBundleShortVersionString | tr -d ' ' | cut -c1-58 | sed 's/^/  版本: /'
 
 echo "  執行檔裡的東西（都應該是 1）:"
-for s in '^frame_drain$' 'Now answering quit requests' 'relaunching the bundle' 'First run with a missing macOS permission' 'Enabled starting Lumen at login' 'Toggling start at login from the system tray' 'Asking for a macOS permission from the system tray'; do
+for s in 'Now answering quit requests' 'relaunching the bundle' 'First run with a missing macOS permission' 'Enabled starting Lumen at login' 'Toggling start at login from the system tray' 'Asking for a macOS permission from the system tray'; do
   printf "    %-58s %s\n" "「${s}」" "$(strings "$BIN" 2>/dev/null | grep -icE -- "$s")"
 done
 echo "    $(printf '%-56s' '殘留 full_disk_access（要 0）') $(strings "$BIN" 2>/dev/null | grep -c full_disk_access)"

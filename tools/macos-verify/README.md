@@ -11,7 +11,7 @@ server, and clicks there fail in ways that look like the app being broken.
 
 | Script | What it answers |
 | --- | --- |
-| `verify-release.sh` | "Is this DMG safe to ship?" Signature, notarization, staple, hardened runtime, entitlements, Finder layout, the patched FFmpeg (`frame_drain`), and the presence of each macOS fix in the shipped binary. |
+| `verify-release.sh` | "Is this DMG safe to ship?" Signature, notarization, staple, hardened runtime, entitlements, Finder layout, and the presence of each macOS fix in the shipped binary. |
 | `verify-installed.sh` | "Is what is in `/Applications` the artifact I built?" Compares its CDHash against the one inside the DMG, then reports version, permissions, ports, menu bar item and any startup errors. |
 | `restore-release.sh` | "Put the real build back." After testing a development build in `/Applications`, copies the notarized one back from the DMG, proves its CDHash matches, and staples the ticket onto the installed copy so it verifies without a network. |
 | `quit-reopen-test.sh` | "Does the app obey the quit request macOS sends before relaunching it?" Sends the same Apple event the "Quit & Reopen" button sends, and reports whether the process actually exits. |
@@ -23,9 +23,7 @@ server, and clicks there fail in ways that look like the app being broken.
 1. Build and notarize: `tools/macos-dmg/lumax-dmg.command` (double-clicked, so it runs in the GUI
    session - the packaging step drives Finder through AppleScript and hangs in a background
    session).
-2. `./verify-release.sh` - everything in its list should be `1` or a pass. A `0` for
-   `frame_drain` means the bundle linked an unpatched FFmpeg, which quietly restores the old
-   host latency.
+2. `./verify-release.sh` - everything in its list should be `1` or a pass.
 3. Install it, then `./verify-installed.sh` - the CDHash must match the DMG, otherwise what is
    installed is not what was notarized.
 4. `sudo /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow console` or a

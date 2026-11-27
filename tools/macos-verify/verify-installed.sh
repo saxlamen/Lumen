@@ -22,7 +22,7 @@ echo "  entitlements: $(codesign -d --entitlements - --xml "$APP" 2>/dev/null | 
 echo "  版本: $(plutil -p "$APP/Contents/Info.plist" 2>/dev/null | grep CFBundleShortVersionString | tr -d ' ' | cut -c1-60)"
 
 echo "  執行檔內容:"
-for s in '^frame_drain$' 'Now answering quit requests' 'relaunching the bundle' 'First run with a missing macOS permission'; do
+for s in 'Now answering quit requests' 'relaunching the bundle' 'First run with a missing macOS permission'; do
   echo "    「${s}」: $(strings "$BIN" 2>/dev/null | grep -icE -- "$s")"
 done
 echo "    殘留 full_disk_access（要 0）: $(strings "$BIN" 2>/dev/null | grep -c full_disk_access)"

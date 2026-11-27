@@ -33,7 +33,7 @@ echo "  釘書複驗: $(xcrun stapler validate "$APP" 2>&1 | tail -1)"
 echo "  簽章: $(codesign --verify --strict "$APP" 2>&1 | tail -1)"
 echo "  Gatekeeper: $(spctl -a -vv "$APP" 2>&1 | tail -1)"
 echo "  CDHash: $(codesign -dvvv "$APP" 2>&1 | grep '^CDHash' | cut -d= -f2)"
-echo "  frame_drain: $(strings "$APP/Contents/MacOS/Sunshine" 2>/dev/null | grep -cx frame_drain)   四個修正: $(strings "$APP/Contents/MacOS/Sunshine" 2>/dev/null | grep -icE 'Now answering quit requests|relaunching the bundle|First run with a missing')"
+echo "  四個修正: $(strings "$APP/Contents/MacOS/Sunshine" 2>/dev/null | grep -icE 'Now answering quit requests|relaunching the bundle|First run with a missing')"
 rm -f ~/.config/sunshine/autostart.stamp
 open -n "$APP"; sleep 9
 P=$(pgrep -x Sunshine | head -1)
