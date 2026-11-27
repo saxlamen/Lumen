@@ -62,7 +62,7 @@ namespace {
   }
 
   /**
-   * @brief Load a tray icon image, preferring pre-rendered PNG siblings for .svg paths.
+   * @brief Load a tray icon image directly from disk, falling back to PNG siblings if needed.
    *
    * @param icon_path Filesystem path to the icon resource.
    * @return Loaded NSImage sized for the macOS menu bar, or nil on failure.
@@ -73,9 +73,12 @@ namespace {
     }
 
     NSString *path = [NSString stringWithUTF8String:icon_path];
-    NSImage *image = nil;
+    NSImage *image = [[NSImage alloc] initWithContentsOfFile:path];
+    if (image && ![image isValid]) {
+      image = nil;
+    }
 
-    if ([[path pathExtension] caseInsensitiveCompare:@"svg"] == NSOrderedSame) {
+    if (!image && [[path pathExtension] caseInsensitiveCompare:@"svg"] == NSOrderedSame) {
       NSString *stem = [path stringByDeletingPathExtension];
       NSArray<NSString *> *candidates = @[
         [stem stringByAppendingString:@"-45.png"],
@@ -86,16 +89,14 @@ namespace {
       for (NSString *candidate in candidates) {
         if ([fm fileExistsAtPath:candidate]) {
           image = [[NSImage alloc] initWithContentsOfFile:candidate];
-          if (image) {
+          if (image && [image isValid]) {
             break;
           }
+          image = nil;
         }
       }
     }
 
-    if (!image) {
-      image = [[NSImage alloc] initWithContentsOfFile:path];
-    }
     if (!image) {
       image = [[NSApp applicationIconImage] copy];
     }
